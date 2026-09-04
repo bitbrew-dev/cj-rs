@@ -475,3 +475,7 @@ fn mount_toml(name: &str, path: &Path) -> String {
     )]);
     toml::to_string(&Snippet { mounts }).expect("mount snippet serialization")
 }
+
+#[cfg(test)]
+#[path = "mounts_tests.rs"]
+mod tests;
