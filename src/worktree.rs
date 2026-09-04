@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
@@ -49,6 +50,71 @@ pub fn render(
         OutputFormat::Json => serde_json::to_string_pretty(&rows)
             .map_err(|error| format!("cannot serialize worktrees: {error}")),
     }
+}
+
+pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, String> {
+    let mut input = Vec::new();
+    for (index, worktree) in worktrees.iter().enumerate() {
+        let row = worktree.row(index == 0, false, Path::new(""));
+        write!(
+            input,
+            "{index}\t{}\t{}\t{}\0",
+            row.path,
+            row.branch.as_deref().unwrap_or("-"),
+            state(&row)
+        )
+        .map_err(|error| format!("cannot prepare fzf input: {error}"))?;
+    }
+
+    let mut child = Command::new(fzf)
+        .args([
+            "--read0",
+            "--print0",
+            "--delimiter=\\t",
+            "--with-nth=2..",
+            "--nth=2..",
+            "--height=40%",
+            "--layout=reverse",
+            "--border",
+            "--prompt=cj worktree> ",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                format!("fzf executable not found: {}", fzf.display())
+            } else {
+                format!("cannot run fzf: {error}")
+            }
+        })?;
+    child
+        .stdin
+        .take()
+        .ok_or("cannot open fzf input")?
+        .write_all(&input)
+        .map_err(|error| format!("cannot write fzf input: {error}"))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot wait for fzf: {error}"))?;
+    if matches!(output.status.code(), Some(1) | Some(130)) {
+        return Ok(None);
+    }
+    if !output.status.success() {
+        return Err(format!("fzf exited with {}", output.status));
+    }
+    let selection = output.stdout.split(|byte| *byte == 0).next().unwrap_or(&[]);
+    let index = selection
+        .split(|byte| *byte == b'\t')
+        .next()
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or("fzf returned an invalid worktree selection")?;
+    worktrees
+        .get(index)
+        .map(|worktree| Some(worktree.path.clone()))
+        .ok_or("fzf returned an unknown worktree selection".into())
 }
 
 fn parse(output: &[u8]) -> Result<Vec<Worktree>, String> {
@@ -290,5 +356,12 @@ mod tests {
             relative_path(Path::new("/repo"), Path::new("/repo")),
             Path::new(".")
         );
+    }
+
+    #[test]
+    fn missing_fzf_has_a_clear_error() {
+        let worktrees = parse(PORCELAIN).unwrap();
+        let error = pick(&worktrees, Path::new("/definitely/missing/fzf")).unwrap_err();
+        assert!(error.contains("fzf executable not found"));
     }
 }
