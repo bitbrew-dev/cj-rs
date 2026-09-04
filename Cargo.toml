@@ -1,6 +1,15 @@
 [package]
 name = "cj-rs"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
+description = "A small shell companion for jumping between useful directories"
+license = "MIT"
+repository = "https://github.com/bitbrew-dev/cj-rs"
+keywords = ["cd", "cli", "directory", "git", "shell"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "cj"
+path = "src/main.rs"
 
 [dependencies]
