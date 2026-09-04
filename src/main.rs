@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod resolver;
 mod shell;
+mod worktree;
 
 use std::process::ExitCode;
 
@@ -24,9 +25,18 @@ fn execute(cli: Cli) -> Result<String, String> {
             setup_key_binding: true,
             ..
         } => Err("key-binding setup is not implemented yet".into()),
-        Command::Worktrees { .. } => {
+        Command::Worktrees {
+            format,
+            relative,
+            pick: false,
+        } => {
             let _config = config::Config::load(cli.config_path.as_deref())?;
-            Err("worktree output is not implemented yet".into())
+            let cwd = std::env::current_dir()
+                .map_err(|error| format!("cannot read current directory: {error}"))?;
+            worktree::render(&worktree::list()?, format, relative, &cwd)
+        }
+        Command::Worktrees { pick: true, .. } => {
+            Err("worktree picker is not implemented yet".into())
         }
     }
 }
