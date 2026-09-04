@@ -79,6 +79,14 @@ impl Config {
             Err(error) => Err(format!("cannot read config {}: {error}", path.display())),
         }
     }
+
+    pub fn key_binding(&self) -> KeyBinding {
+        match env::consts::OS {
+            "macos" => self.key_bindings.macos,
+            "linux" => self.key_bindings.linux,
+            _ => KeyBinding::None,
+        }
+    }
 }
 
 impl Default for Behavior {

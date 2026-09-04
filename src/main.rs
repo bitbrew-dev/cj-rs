@@ -20,11 +20,18 @@ fn execute(cli: Cli) -> Result<String, String> {
         Command::Init {
             shell,
             setup_key_binding: false,
-        } => Ok(shell::render(shell, cli.config_path.as_deref())),
+        } => Ok(shell::render(shell, cli.config_path.as_deref(), None)),
         Command::Init {
+            shell,
             setup_key_binding: true,
-            ..
-        } => Err("key-binding setup is not implemented yet".into()),
+        } => {
+            let config = config::Config::load(cli.config_path.as_deref())?;
+            Ok(shell::render(
+                shell,
+                cli.config_path.as_deref(),
+                Some(config.key_binding()),
+            ))
+        }
         Command::Worktrees {
             format,
             relative,
@@ -36,7 +43,10 @@ fn execute(cli: Cli) -> Result<String, String> {
             worktree::render(&worktree::list()?, format, relative, &cwd)
         }
         Command::Worktrees { pick: true, .. } => {
-            Err("worktree picker is not implemented yet".into())
+            let config = config::Config::load(cli.config_path.as_deref())?;
+            Ok(worktree::pick(&worktree::list()?, &config.programs.fzf)?
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default())
         }
     }
 }
