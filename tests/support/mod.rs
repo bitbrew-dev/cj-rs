@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 static NEXT_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct TempDir {
@@ -99,6 +102,37 @@ pub fn assert_success(output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(unix)]
+pub fn write_executable(path: &Path, body: &str) {
+    fs::create_dir_all(path.parent().expect("executable parent"))
+        .expect("create executable parent");
+    fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("write fake executable");
+    let mut permissions = fs::metadata(path)
+        .expect("fake executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("make fake executable runnable");
+}
+
+pub fn write_config(path: &Path, zoxide: &Path, fzf: &Path) {
+    fs::create_dir_all(path.parent().expect("config parent")).expect("create config parent");
+    fs::write(
+        path,
+        format!(
+            "[programs]\nzoxide = \"{}\"\nfzf = \"{}\"\n",
+            toml_path(zoxide),
+            toml_path(fzf)
+        ),
+    )
+    .expect("write config");
+}
+
+fn toml_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 fn git<const N: usize>(cwd: &Path, args: [&str; N]) {
