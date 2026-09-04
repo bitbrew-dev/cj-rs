@@ -20,17 +20,20 @@ fn execute(cli: Cli) -> Result<String, String> {
         Command::Init {
             shell,
             setup_key_binding: false,
-        } => Ok(shell::render(shell, cli.config_path.as_deref(), None)),
+        } => {
+            let _config = config::Config::load(cli.config_path.as_deref())?;
+            shell::render(shell, cli.config_path.as_deref(), None)
+        }
         Command::Init {
             shell,
             setup_key_binding: true,
         } => {
             let config = config::Config::load(cli.config_path.as_deref())?;
-            Ok(shell::render(
+            shell::render(
                 shell,
                 cli.config_path.as_deref(),
                 Some(config.key_binding()),
-            ))
+            )
         }
         Command::Worktrees {
             format,

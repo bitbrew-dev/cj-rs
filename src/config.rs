@@ -130,8 +130,12 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 fn config_path_from(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    xdg.map(PathBuf::from)
-        .or_else(|| home.map(|path| PathBuf::from(path).join(".config")))
+    xdg.filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|path| !path.is_empty())
+                .map(|path| PathBuf::from(path).join(".config"))
+        })
         .map(|path| path.join("cj/config.toml"))
 }
 
@@ -168,5 +172,10 @@ mod tests {
             config_path_from(None, Some("/home/me".into())),
             Some("/home/me/.config/cj/config.toml".into())
         );
+        assert_eq!(
+            config_path_from(Some("".into()), Some("/home/me".into())),
+            Some("/home/me/.config/cj/config.toml".into())
+        );
+        assert_eq!(config_path_from(None, Some("".into())), None);
     }
 }
