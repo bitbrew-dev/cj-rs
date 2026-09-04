@@ -15,6 +15,7 @@ on:
 jobs:
   semantic-release:
     name: semantic-release
+    if: ${{ inputs.prompt == 'true' }}
     uses: bitbrew-dev/r-workflows/.github/workflows/semantic-release.yml@main
     # uses: bitbrew-dev/reusable-workflows/.github/workflows/semantic-release.yml@main
     permissions:
