@@ -42,6 +42,7 @@ jobs:
           files_yaml: |
             tests:
               - src/**/*.rs
+              - tests/**/*.rs
               - Cargo.toml
               - Cargo.lock
               - rust-toolchain.toml
