@@ -3,7 +3,8 @@ use std::path::{Component, PathBuf};
 use std::process::{Command, Output};
 
 use crate::cli::ResolverOverride;
-use crate::config::{Config, DefaultResolver};
+use crate::config::{Config, DefaultResolver, MountSpec};
+use crate::mounts::{self, DiscoveryContext};
 
 pub fn resolve(
     targets: &[OsString],
@@ -36,6 +37,12 @@ pub fn resolve(
             }
             if let Some(count) = repeated_count(text, &config.tickers.navigate_down) {
                 return navigate_down(count, navigation);
+            }
+            if let Some(path) = config.aliases.get(text) {
+                return resolve_configured_directory("alias", text, path);
+            }
+            if let Some(mount) = config.mounts.get(text) {
+                return resolve_mount(text, mount);
             }
             if config.keywords.top.iter().any(|keyword| keyword == text) {
                 return git_output(["rev-parse", "--show-toplevel"]);
@@ -85,6 +92,46 @@ fn literal_target(targets: &[OsString]) -> Result<PathBuf, String> {
         [target] => Ok(PathBuf::from(target)),
         _ => Err("builtin cd accepts exactly one directory".into()),
     }
+}
+
+fn resolve_mount(name: &str, mount: &MountSpec) -> Result<PathBuf, String> {
+    if let Some(path) = mount.path.as_deref() {
+        return resolve_configured_directory("mount", name, path);
+    }
+    let provider = mount
+        .provider
+        .ok_or_else(|| format!("mount {name:?} has no path or provider"))?;
+    let context = DiscoveryContext::from_process()?;
+    mounts::resolve_provider(provider, &context).map_err(|error| format!("mount {name:?}: {error}"))
+}
+
+fn resolve_configured_directory(
+    kind: &str,
+    name: &str,
+    path: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let path = expand_config_path(path).map_err(|error| format!("{kind} {name:?}: {error}"))?;
+    if path.is_dir() {
+        Ok(path)
+    } else {
+        Err(format!("{kind} {name:?} is not reachable: {path:?}"))
+    }
+}
+
+fn expand_config_path(path: &std::path::Path) -> Result<PathBuf, String> {
+    let value = path.to_str().ok_or("configured path must be valid UTF-8")?;
+    if value != "~" && !value.starts_with("~/") {
+        return Ok(path.into());
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .ok_or("cannot expand ~ because HOME is not set")?;
+    Ok(if value == "~" {
+        home
+    } else {
+        home.join(&value[2..])
+    })
 }
 
 fn query_zoxide(targets: &[OsString], config: &Config) -> Result<PathBuf, ZoxideFailure> {
@@ -216,6 +263,7 @@ fn git_output<const N: usize>(args: [&str; N]) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -274,6 +322,75 @@ mod tests {
             ),
             Ok(Path::new("project").into())
         );
+    }
+
+    #[test]
+    fn configured_destinations_follow_precedence_and_resolver_modes() {
+        let root =
+            std::env::temp_dir().join(format!("cj-resolver-destinations-{}", std::process::id()));
+        let alias = root.join("alias destination");
+        let mount = root.join("mount destination");
+        fs::create_dir_all(&alias).unwrap();
+        fs::create_dir_all(&mount).unwrap();
+
+        let mut config = Config::default();
+        config.aliases.insert("top".into(), alias.clone());
+        config.mounts.insert(
+            "origin".into(),
+            MountSpec {
+                path: Some(mount.clone()),
+                provider: None,
+            },
+        );
+        config.aliases.insert("^".into(), alias.clone());
+        let navigation = NavigationContext {
+            cwd: root.clone(),
+            down_route: None,
+        };
+
+        assert_eq!(
+            resolve(
+                &["top".into()],
+                ResolverOverride::NoZoxide,
+                &config,
+                &navigation,
+            ),
+            Ok(alias.clone())
+        );
+        assert_eq!(
+            resolve(
+                &["origin".into()],
+                ResolverOverride::NoZoxide,
+                &config,
+                &navigation,
+            ),
+            Ok(mount)
+        );
+        assert_eq!(
+            resolve(
+                &["^".into()],
+                ResolverOverride::NoZoxide,
+                &config,
+                &navigation,
+            ),
+            Ok("..".into())
+        );
+        assert_eq!(
+            resolve(&["top".into()], ResolverOverride::Raw, &config, &navigation,),
+            Ok("top".into())
+        );
+
+        config.aliases.insert("missing".into(), root.join("absent"));
+        let error = resolve(
+            &["missing".into()],
+            ResolverOverride::Configured,
+            &config,
+            &navigation,
+        )
+        .unwrap_err();
+        assert!(error.starts_with("alias \"missing\" is not reachable:"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

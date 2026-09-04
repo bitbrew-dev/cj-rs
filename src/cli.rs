@@ -7,24 +7,29 @@ cj - jump between useful directories
 Usage:
   cj [OPTIONS] [TARGET]...
   cj [OPTIONS] --worktree [--format table|json] [--relative]
+  cj [OPTIONS] config init [--preamp]
+  cj [OPTIONS] mounts scan [--format table|json]
   cj [OPTIONS] init <bash|zsh> [--setup-key-binding]
 
 Options:
   -C, --config <PATH>       Use a different config.toml
+  -v, --verbose             Show discovery details and skipped candidates
   -r, --raw                 Treat the target as a literal directory
   -z, --zoxide             Force zoxide resolution
   -Z, --no-zoxide          Disable zoxide while retaining cj shortcuts
   -w, --worktree           List this repository's worktrees
-  -f, --format <FORMAT>    Worktree format: table or json [default: table]
+  -f, --format <FORMAT>    Output format: table or json [default: table]
   -R, --relative           Render worktree paths relative to the current directory
       --pick-worktree      Select a worktree with fzf
       --setup-key-binding  Include the OS-specific fzf binding in shell setup
+      --preamp             Add unambiguous mounts to a new config
   -h, --help               Print help
   -V, --version            Print version";
 
 #[derive(Debug, PartialEq)]
 pub struct Cli {
     pub config_path: Option<PathBuf>,
+    pub verbose: bool,
     pub command: Command,
 }
 
@@ -44,6 +49,12 @@ pub enum Command {
     Init {
         shell: Shell,
         setup_key_binding: bool,
+    },
+    ConfigInit {
+        preamp: bool,
+    },
+    MountsScan {
+        format: OutputFormat,
     },
 }
 
@@ -71,12 +82,14 @@ impl Cli {
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
         let mut args = args.into_iter().peekable();
         let mut config_path = None;
+        let mut verbose = false;
         let mut resolver = ResolverOverride::Configured;
         let mut worktree = false;
         let mut format = None;
         let mut relative = false;
         let mut pick = false;
         let mut setup_key_binding = false;
+        let mut preamp = false;
         let mut targets = Vec::new();
         let mut options = true;
         let mut force_resolve = false;
@@ -89,16 +102,20 @@ impl Cli {
             } else if options && matches!(text, Some("-h" | "--help")) {
                 return Ok(Self {
                     config_path,
+                    verbose,
                     command: Command::Help,
                 });
             } else if options && matches!(text, Some("-V" | "--version")) {
                 return Ok(Self {
                     config_path,
+                    verbose,
                     command: Command::Version,
                 });
             } else if options && matches!(text, Some("-C" | "--config")) {
                 let path = args.next().ok_or("--config requires a path")?;
                 config_path = Some(PathBuf::from(path));
+            } else if options && matches!(text, Some("-v" | "--verbose")) {
+                verbose = true;
             } else if options && matches!(text, Some("-z" | "--zoxide")) {
                 set_resolver(&mut resolver, ResolverOverride::Zoxide)?;
             } else if options && matches!(text, Some("-Z" | "--no-zoxide")) {
@@ -117,6 +134,8 @@ impl Cli {
                 pick = true;
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
+            } else if options && text == Some("--preamp") {
+                preamp = true;
             } else if options && text.is_some_and(|value| value.starts_with('-')) {
                 return Err(format!("unknown option: {}", argument.to_string_lossy()));
             } else {
@@ -125,6 +144,32 @@ impl Cli {
         }
 
         let command = if !force_resolve
+            && resolver == ResolverOverride::Configured
+            && targets.first().and_then(|arg| arg.to_str()) == Some("config")
+        {
+            parse_config_init(
+                &targets,
+                preamp,
+                setup_key_binding,
+                worktree,
+                format,
+                relative,
+                pick,
+            )?
+        } else if !force_resolve
+            && resolver == ResolverOverride::Configured
+            && targets.first().and_then(|arg| arg.to_str()) == Some("mounts")
+        {
+            parse_mounts_scan(
+                &targets,
+                preamp,
+                setup_key_binding,
+                worktree,
+                format,
+                relative,
+                pick,
+            )?
+        } else if !force_resolve
             && resolver == ResolverOverride::Configured
             && targets.first().and_then(|arg| arg.to_str()) == Some("init")
         {
@@ -135,13 +180,13 @@ impl Cli {
                 format,
                 relative,
                 pick,
-                resolver,
+                preamp,
             )?
         } else if worktree {
             if !targets.is_empty() {
                 return Err("--worktree does not accept a target".into());
             }
-            if resolver != ResolverOverride::Configured || setup_key_binding {
+            if resolver != ResolverOverride::Configured || setup_key_binding || preamp {
                 return Err("resolver and setup flags cannot be used with --worktree".into());
             }
             if pick && (format.is_some() || relative) {
@@ -153,7 +198,7 @@ impl Cli {
                 pick,
             }
         } else {
-            if format.is_some() || relative || pick || setup_key_binding {
+            if format.is_some() || relative || pick || setup_key_binding || preamp {
                 return Err(
                     "--format, --relative, and setup flags require their matching mode".into(),
                 );
@@ -163,6 +208,7 @@ impl Cli {
 
         Ok(Self {
             config_path,
+            verbose,
             command,
         })
     }
@@ -191,10 +237,9 @@ fn parse_init(
     format: Option<OutputFormat>,
     relative: bool,
     pick: bool,
-    resolver: ResolverOverride,
+    preamp: bool,
 ) -> Result<Command, String> {
-    if worktree || format.is_some() || relative || pick || resolver != ResolverOverride::Configured
-    {
+    if worktree || format.is_some() || relative || pick || preamp {
         return Err("worktree and resolver flags cannot be used with init".into());
     }
     if targets.len() != 2 {
@@ -211,6 +256,49 @@ fn parse_init(
     })
 }
 
+fn parse_config_init(
+    targets: &[OsString],
+    preamp: bool,
+    setup_key_binding: bool,
+    worktree: bool,
+    format: Option<OutputFormat>,
+    relative: bool,
+    pick: bool,
+) -> Result<Command, String> {
+    if targets.len() != 2 || targets[1].to_str() != Some("init") {
+        return Err("usage: cj config init [--preamp]".into());
+    }
+    if setup_key_binding || worktree || format.is_some() || relative || pick {
+        return Err(
+            "worktree, output, and shell setup flags cannot be used with config init".into(),
+        );
+    }
+    Ok(Command::ConfigInit { preamp })
+}
+
+fn parse_mounts_scan(
+    targets: &[OsString],
+    preamp: bool,
+    setup_key_binding: bool,
+    worktree: bool,
+    format: Option<OutputFormat>,
+    relative: bool,
+    pick: bool,
+) -> Result<Command, String> {
+    if targets.len() != 2 || targets[1].to_str() != Some("scan") {
+        return Err("usage: cj mounts scan [--format table|json]".into());
+    }
+    if preamp || setup_key_binding || worktree || relative || pick {
+        return Err(
+            "worktree, relative, preamp, and shell setup flags cannot be used with mounts scan"
+                .into(),
+        );
+    }
+    Ok(Command::MountsScan {
+        format: format.unwrap_or(OutputFormat::Table),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +309,7 @@ mod tests {
             Cli::parse(["-C", "other.toml", "-z", "project"].map(Into::into)),
             Ok(Cli {
                 config_path: Some("other.toml".into()),
+                verbose: false,
                 command: Command::Resolve {
                     targets: vec!["project".into()],
                     resolver: ResolverOverride::Zoxide,
@@ -235,6 +324,7 @@ mod tests {
             Cli::parse(["-w", "-f", "json", "-R"].map(Into::into)),
             Ok(Cli {
                 config_path: None,
+                verbose: false,
                 command: Command::Worktrees {
                     format: OutputFormat::Json,
                     relative: true,
@@ -301,5 +391,32 @@ mod tests {
     fn picker_rejects_ignored_output_flags() {
         assert!(Cli::parse(["--pick-worktree", "-R"].map(Into::into)).is_err());
         assert!(Cli::parse(["--pick-worktree", "-f", "json"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn parses_config_init_and_mount_scan() {
+        let init = Cli::parse(["-v", "config", "init", "--preamp"].map(Into::into)).unwrap();
+        assert!(init.verbose);
+        assert_eq!(init.command, Command::ConfigInit { preamp: true });
+
+        let scan = Cli::parse(["mounts", "scan", "-f", "json"].map(Into::into)).unwrap();
+        assert_eq!(
+            scan.command,
+            Command::MountsScan {
+                format: OutputFormat::Json
+            }
+        );
+    }
+
+    #[test]
+    fn validates_new_command_flags_and_literal_escape() {
+        assert!(Cli::parse(["config", "init", "--format", "json"].map(Into::into)).is_err());
+        assert!(Cli::parse(["mounts", "scan", "--preamp"].map(Into::into)).is_err());
+        assert!(matches!(
+            Cli::parse(["--", "mounts", "scan"].map(Into::into))
+                .unwrap()
+                .command,
+            Command::Resolve { .. }
+        ));
     }
 }
