@@ -1,57 +1,23 @@
-use std::ffi::OsString;
-use std::fmt;
+mod cli;
+mod config;
+
 use std::process::ExitCode;
 
-const HELP: &str = "\
-cj - jump between useful directories
+use cli::{Cli, Command};
 
-Usage: cj [OPTIONS] [TARGET]
-
-Options:
-  -h, --help       Print help
-  -V, --version    Print version
-
-Directory targets will arrive in a future release.";
-
-#[derive(Debug, PartialEq)]
-enum Command {
-    Help,
-    Version,
-}
-
-#[derive(Debug, PartialEq)]
-struct CliError(String);
-
-impl fmt::Display for CliError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliError> {
-    let args: Vec<_> = args.into_iter().collect();
-
-    match args.as_slice() {
-        [] => Ok(Command::Help),
-        [argument] if argument == "-h" || argument == "--help" => Ok(Command::Help),
-        [argument] if argument == "-V" || argument == "--version" => Ok(Command::Version),
-        [argument] => Err(CliError(format!(
-            "directory targets are not available yet: {}",
-            argument.to_string_lossy()
-        ))),
-        _ => Err(CliError("expected at most one target".into())),
-    }
-}
-
-fn run(args: impl IntoIterator<Item = OsString>) -> Result<&'static str, CliError> {
-    match parse(args)? {
-        Command::Help => Ok(HELP),
-        Command::Version => Ok(concat!("cj ", env!("CARGO_PKG_VERSION"))),
+fn execute(cli: Cli) -> Result<String, String> {
+    match cli.command {
+        Command::Help => Ok(cli::HELP.into()),
+        Command::Version => Ok(concat!("cj ", env!("CARGO_PKG_VERSION")).into()),
+        Command::Resolve { .. } | Command::Worktrees { .. } | Command::Init { .. } => {
+            let _config = config::Config::load(cli.config_path.as_deref())?;
+            Err("command is not implemented yet".into())
+        }
     }
 }
 
 fn main() -> ExitCode {
-    match run(std::env::args_os().skip(1)) {
+    match Cli::parse(std::env::args_os().skip(1)).and_then(execute) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
@@ -60,30 +26,5 @@ fn main() -> ExitCode {
             eprintln!("cj: {error}");
             ExitCode::from(2)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_to_help() {
-        assert_eq!(parse([]), Ok(Command::Help));
-    }
-
-    #[test]
-    fn parses_version() {
-        assert_eq!(parse(["--version".into()]), Ok(Command::Version));
-    }
-
-    #[test]
-    fn rejects_targets_until_the_resolver_exists() {
-        assert_eq!(
-            parse(["top".into()]),
-            Err(CliError(
-                "directory targets are not available yet: top".into()
-            ))
-        );
     }
 }
