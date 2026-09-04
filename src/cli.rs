@@ -9,7 +9,8 @@ Usage:
   cj [OPTIONS] --worktree [--format table|json] [--relative]
   cj [OPTIONS] config init [--preamp]
   cj [OPTIONS] mounts scan [--format table|json]
-  cj [OPTIONS] init <bash|zsh> [--setup-key-binding]
+  cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding]
+  cj [OPTIONS] completions <bash|zsh|nu|powershell>
 
 Options:
   -C, --config <PATH>       Use a different config.toml
@@ -50,6 +51,9 @@ pub enum Command {
         shell: Shell,
         setup_key_binding: bool,
     },
+    Completions {
+        shell: Shell,
+    },
     ConfigInit {
         preamp: bool,
     },
@@ -76,6 +80,8 @@ pub enum OutputFormat {
 pub enum Shell {
     Bash,
     Zsh,
+    Nu,
+    Pwsh,
 }
 
 impl Cli {
@@ -182,6 +188,19 @@ impl Cli {
                 pick,
                 preamp,
             )?
+        } else if !force_resolve
+            && resolver == ResolverOverride::Configured
+            && targets.first().and_then(|arg| arg.to_str()) == Some("completions")
+        {
+            parse_completions(
+                &targets,
+                setup_key_binding,
+                worktree,
+                format,
+                relative,
+                pick,
+                preamp,
+            )?
         } else if worktree {
             if !targets.is_empty() {
                 return Err("--worktree does not accept a target".into());
@@ -243,17 +262,46 @@ fn parse_init(
         return Err("worktree and resolver flags cannot be used with init".into());
     }
     if targets.len() != 2 {
-        return Err("usage: cj init <bash|zsh> [--setup-key-binding]".into());
+        return Err("usage: cj init <bash|zsh|nu|powershell> [--setup-key-binding]".into());
     }
-    let shell = match targets[1].to_str() {
-        Some("bash") => Shell::Bash,
-        Some("zsh") => Shell::Zsh,
-        _ => return Err("supported shells: bash, zsh".into()),
-    };
+    let shell = parse_shell(&targets[1])?;
+    if setup_key_binding && matches!(shell, Shell::Nu | Shell::Pwsh) {
+        return Err("--setup-key-binding is currently supported for bash and zsh only".into());
+    }
     Ok(Command::Init {
         shell,
         setup_key_binding,
     })
+}
+
+fn parse_completions(
+    targets: &[OsString],
+    setup_key_binding: bool,
+    worktree: bool,
+    format: Option<OutputFormat>,
+    relative: bool,
+    pick: bool,
+    preamp: bool,
+) -> Result<Command, String> {
+    if setup_key_binding || worktree || format.is_some() || relative || pick || preamp {
+        return Err("worktree, output, and setup flags cannot be used with completions".into());
+    }
+    if targets.len() != 2 {
+        return Err("usage: cj completions <bash|zsh|nu|powershell>".into());
+    }
+    Ok(Command::Completions {
+        shell: parse_shell(&targets[1])?,
+    })
+}
+
+fn parse_shell(value: &OsString) -> Result<Shell, String> {
+    match value.to_str() {
+        Some("bash") => Ok(Shell::Bash),
+        Some("zsh") => Ok(Shell::Zsh),
+        Some("nu") => Ok(Shell::Nu),
+        Some("powershell" | "pwsh") => Ok(Shell::Pwsh),
+        _ => Err("supported shells: bash, zsh, nu, powershell".into()),
+    }
 }
 
 fn parse_config_init(
@@ -414,6 +462,44 @@ mod tests {
         assert!(Cli::parse(["mounts", "scan", "--preamp"].map(Into::into)).is_err());
         assert!(matches!(
             Cli::parse(["--", "mounts", "scan"].map(Into::into))
+                .unwrap()
+                .command,
+            Command::Resolve { .. }
+        ));
+    }
+
+    #[test]
+    fn parses_all_integration_and_completion_shells() {
+        for (name, shell) in [
+            ("bash", Shell::Bash),
+            ("zsh", Shell::Zsh),
+            ("nu", Shell::Nu),
+            ("powershell", Shell::Pwsh),
+            ("pwsh", Shell::Pwsh),
+        ] {
+            assert_eq!(
+                Cli::parse(["init", name].map(Into::into)).unwrap().command,
+                Command::Init {
+                    shell,
+                    setup_key_binding: false,
+                }
+            );
+            assert_eq!(
+                Cli::parse(["completions", name].map(Into::into))
+                    .unwrap()
+                    .command,
+                Command::Completions { shell }
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_shell_setup_combinations() {
+        assert!(Cli::parse(["init", "fish"].map(Into::into)).is_err());
+        assert!(Cli::parse(["init", "nu", "--setup-key-binding"].map(Into::into)).is_err());
+        assert!(Cli::parse(["completions", "bash", "-w"].map(Into::into)).is_err());
+        assert!(matches!(
+            Cli::parse(["--", "completions", "bash"].map(Into::into))
                 .unwrap()
                 .command,
             Command::Resolve { .. }

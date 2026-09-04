@@ -126,6 +126,12 @@ impl Config {
         if self.tickers.navigate_up == self.tickers.navigate_down {
             return Err("tickers.navigate_up and tickers.navigate_down must differ".into());
         }
+        for keyword in &self.keywords.top {
+            validate_name("top keyword", keyword)?;
+        }
+        for keyword in &self.keywords.main_worktree {
+            validate_name("main-worktree keyword", keyword)?;
+        }
         for (name, path) in &self.aliases {
             validate_name("alias", name)?;
             validate_config_path(&format!("aliases.{name}"), path)?;
@@ -358,6 +364,13 @@ mod tests {
             config.validate(),
             Err("name \"code\" is used by both an alias and a mount".into())
         );
+    }
+
+    #[test]
+    fn rejects_multiline_keywords_before_shell_generation() {
+        let mut config = Config::default();
+        config.keywords.top = vec!["line\nbreak".into()];
+        assert!(config.validate().unwrap_err().contains("top keyword"));
     }
 
     #[test]

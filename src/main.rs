@@ -1,4 +1,5 @@
 mod cli;
+mod completions;
 mod config;
 mod config_init;
 mod mounts;
@@ -48,9 +49,13 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 shell,
                 config_path.as_deref(),
                 setup_key_binding.then(|| config.key_binding()),
-                &config.tickers,
+                &config,
             )
             .map(Execution::stdout)
+        }
+        Command::Completions { shell } => {
+            let config = config::Config::load(config_path.as_deref())?;
+            Ok(Execution::stdout(completions::render(shell, &config)))
         }
         Command::Worktrees {
             format,

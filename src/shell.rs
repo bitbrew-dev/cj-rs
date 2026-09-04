@@ -1,9 +1,22 @@
 use std::path::Path;
 
 use crate::cli::Shell;
-use crate::config::{KeyBinding, Tickers};
+use crate::config::{Config, KeyBinding, Tickers};
 
 pub fn render(
+    shell: Shell,
+    config_path: Option<&Path>,
+    binding: Option<KeyBinding>,
+    config: &Config,
+) -> Result<String, String> {
+    match shell {
+        Shell::Bash | Shell::Zsh => render_posix(shell, config_path, binding, &config.tickers),
+        Shell::Nu => render_nu(config_path, config),
+        Shell::Pwsh => render_powershell(config_path, &config.tickers),
+    }
+}
+
+fn render_posix(
     shell: Shell,
     config_path: Option<&Path>,
     binding: Option<KeyBinding>,
@@ -14,9 +27,7 @@ pub fn render(
         .transpose()?
         .map(|path| format!(" -C {}", quote(&path.to_string_lossy())))
         .unwrap_or_default();
-    let builtin = match shell {
-        Shell::Bash | Shell::Zsh => "builtin",
-    };
+    let builtin = "builtin";
     let navigate_up = quote(&tickers.navigate_up);
     let navigate_down = quote(&tickers.navigate_down);
 
@@ -38,6 +49,7 @@ function _cj_is_repeated() {{
 \builtin unalias cd 2>/dev/null || :
 function cd() {{
     local target _cj_status _cj_before _cj_after _cj_nav_arg _cj_nav_mode
+    local -a _cj_args
 
     if [[ $# -eq 0 ]]; then
         \{builtin} cd
@@ -91,8 +103,12 @@ function cd() {{
     elif _cj_is_repeated "${{_cj_nav_arg-}}" "$_cj_navigate_down"; then
         _cj_nav_mode=down
     fi
+    case "${{1-}}" in
+        -z|--zoxide|-Z|--no-zoxide) _cj_args=("$@") ;;
+        *) _cj_args=(-- "$@") ;;
+    esac
     _cj_before="$(\builtin pwd -P)" || return
-    target="$(CJ_INTERNAL_DOWN_ROUTE="${{_cj_down_route-}}" \command cj{config} "$@")"
+    target="$(CJ_INTERNAL_DOWN_ROUTE="${{_cj_down_route-}}" \command cj{config} "${{_cj_args[@]}}")"
     _cj_status=$?
     (( _cj_status == 0 )) || return "$_cj_status"
     [[ -n "$target" ]] || return 1
@@ -161,7 +177,233 @@ fn render_binding(shell: Shell, config: &str, control: bool) -> String {
 \builtin bindkey '{key}' _cj_worktree_widget"#
             )
         }
+        Shell::Nu | Shell::Pwsh => unreachable!("bindings are POSIX-shell only"),
     }
+}
+
+fn render_nu(config_path: Option<&Path>, settings: &Config) -> Result<String, String> {
+    let config = config_path
+        .map(absolute)
+        .transpose()?
+        .map(|path| format!("[-C {}]", quote_nu(&path.to_string_lossy())))
+        .unwrap_or_else(|| "[]".into());
+    let navigate_up = quote_nu(&settings.tickers.navigate_up);
+    let navigate_down = quote_nu(&settings.tickers.navigate_down);
+    let destinations = crate::completions::destinations(settings)
+        .iter()
+        .map(|value| {
+            format!(
+                "{{ value: {}, description: 'cj destination' }}",
+                quote_nu(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(
+        r#"export-env {{
+    $env.CJ_INTERNAL_DOWN_ROUTE = ($env.CJ_INTERNAL_DOWN_ROUTE? | default '')
+}}
+
+def _cj-is-repeated [value: string, ticker: string] {{
+    ($value | str length) > 0 and (($value | split chars | all {{ |char| $char == $ticker }}))
+}}
+
+def _cj-complete-cd [spans: list<string>] {{
+    let current = ($spans | last)
+    let configured = ([{destinations}] | where value starts-with $current)
+    let directories = ($current | commandline complete --detailed --type directory | each {{ |entry|
+        {{ value: $entry.value, description: 'directory' }}
+    }})
+    $configured | append $directories
+}}
+
+@complete '_cj-complete-cd'
+export def --env --wrapped __cj_cd [...args: string] {{
+    let config = {config}
+    let navigate_up = {navigate_up}
+    let navigate_down = {navigate_down}
+
+    if ($args | is-empty) {{
+        cd $nu.home-path
+        $env.CJ_INTERNAL_DOWN_ROUTE = ''
+        return
+    }}
+
+    if (($args.0 == '-r') or ($args.0 == '--raw')) {{
+        if ($args | length) != 2 {{
+            error make {{ msg: 'cj: --raw requires exactly one target' }}
+        }}
+        cd $args.1
+        $env.CJ_INTERNAL_DOWN_ROUTE = ''
+        return
+    }}
+
+    if (($args.0 == '-P') or ($args.0 == '--physical')) {{
+        if ($args | length) > 2 {{ error make {{ msg: 'cj: --physical accepts at most one target' }} }}
+        if ($args | length) == 1 {{ cd --physical }} else {{ cd --physical $args.1 }}
+        $env.CJ_INTERNAL_DOWN_ROUTE = ''
+        return
+    }}
+
+    if (($args | length) == 1) and (($args.0 == '-h') or ($args.0 == '--help')) {{
+        help cd
+        return
+    }}
+
+    if (($args | length) == 1) and (not ($args.0 | str starts-with '-')) {{
+        let direct = (try {{ cd $args.0; true }} catch {{ false }})
+        if $direct {{
+            $env.CJ_INTERNAL_DOWN_ROUTE = ''
+            return
+        }}
+    }} else if (($args | length) == 2) and (($args.0 == '-Z') or ($args.0 == '--no-zoxide')) {{
+        let direct = (try {{ cd $args.1; true }} catch {{ false }})
+        if $direct {{
+            $env.CJ_INTERNAL_DOWN_ROUTE = ''
+            return
+        }}
+    }} else if ($args.0 | str starts-with '-') and (not ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide'])) {{
+        if ($args | length) != 1 {{ error make {{ msg: 'cj: Nushell cd accepts one target' }} }}
+        cd $args.0
+        $env.CJ_INTERNAL_DOWN_ROUTE = ''
+        return
+    }}
+
+    let nav_arg = if (($args | length) == 1) {{ $args.0 }} else if (($args | length) == 2) and (($args.0 == '-Z') or ($args.0 == '--no-zoxide')) {{ $args.1 }} else {{ '' }}
+    let before = ($env.PWD | path expand)
+    let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide']) {{ $args }} else {{ ['--'] | append $args }}
+    let result = with-env {{ CJ_INTERNAL_DOWN_ROUTE: $env.CJ_INTERNAL_DOWN_ROUTE }} {{
+        ^cj ...$config ...$invoke_args | complete
+    }}
+    if $result.exit_code != 0 {{
+        if not ($result.stderr | is-empty) {{ print --stderr --no-newline $result.stderr }}
+        error make {{ msg: $'cj exited with status ($result.exit_code)' }}
+    }}
+    let target = ($result.stdout | str replace --regex '\r?\n$' '')
+    if ($target | is-empty) {{ error make {{ msg: 'cj returned an empty destination' }} }}
+    cd $target
+    let after = ($env.PWD | path expand)
+
+    if (_cj-is-repeated $nav_arg $navigate_up) and ($after != $before) {{
+        let route_is_below = if ($env.CJ_INTERNAL_DOWN_ROUTE | is-empty) {{ false }} else {{
+            try {{
+                let relative = ($env.CJ_INTERNAL_DOWN_ROUTE | path relative-to $before)
+                (($relative | path split | first) != '..')
+            }} catch {{ false }}
+        }}
+        if not $route_is_below {{
+            $env.CJ_INTERNAL_DOWN_ROUTE = $before
+        }}
+    }} else if (_cj-is-repeated $nav_arg $navigate_down) {{
+        if $after == $env.CJ_INTERNAL_DOWN_ROUTE {{ $env.CJ_INTERNAL_DOWN_ROUTE = '' }}
+    }} else {{
+        $env.CJ_INTERNAL_DOWN_ROUTE = ''
+    }}
+}}
+
+export alias cd = __cj_cd"#
+    ))
+}
+
+fn render_powershell(config_path: Option<&Path>, tickers: &Tickers) -> Result<String, String> {
+    let config = config_path
+        .map(absolute)
+        .transpose()?
+        .map(|path| format!("@('-C', {})", quote_powershell(&path.to_string_lossy())))
+        .unwrap_or_else(|| "@()".into());
+    let navigate_up = quote_powershell(&tickers.navigate_up);
+    let navigate_down = quote_powershell(&tickers.navigate_down);
+    Ok(format!(
+        r#"$script:__cj_executable = Get-Command cj -CommandType Application -ErrorAction Stop | Select-Object -First 1
+$script:__cj_config = {config}
+$global:__cj_down_route = $null
+$script:__cj_navigate_up = {navigate_up}
+$script:__cj_navigate_down = {navigate_down}
+$script:__cj_path_comparison = if ($IsWindows) {{ [System.StringComparison]::OrdinalIgnoreCase }} else {{ [System.StringComparison]::Ordinal }}
+
+function script:Test-CjRepeated {{
+    param([string]$Value, [string]$Ticker)
+    if ([string]::IsNullOrEmpty($Value) -or [string]::IsNullOrEmpty($Ticker)) {{ return $false }}
+    return $Value.Replace($Ticker, '').Length -eq 0
+}}
+
+function script:Test-CjDescendant {{
+    param([string]$Root, [string]$Candidate)
+    if ([string]::IsNullOrEmpty($Root) -or [string]::IsNullOrEmpty($Candidate)) {{ return $false }}
+    $relative = [System.IO.Path]::GetRelativePath($Root, $Candidate)
+    $parentPrefix = '..' + [System.IO.Path]::DirectorySeparatorChar
+    return -not [System.IO.Path]::IsPathRooted($relative) -and $relative -ne '..' -and -not $relative.StartsWith($parentPrefix, $script:__cj_path_comparison)
+}}
+
+Remove-Item Alias:cd -Force -ErrorAction SilentlyContinue
+function global:cd {{
+    $cjArgs = @($args)
+    if ($cjArgs.Count -eq 0) {{
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $HOME -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+    $first = [string]$cjArgs[0]
+
+    if (($first -ceq '-r') -or ($first -ceq '--raw')) {{
+        if ($cjArgs.Count -ne 2) {{ throw 'cj: --raw requires exactly one target' }}
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[1] -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+
+    if (($cjArgs.Count -eq 1) -and (Test-Path -LiteralPath $cjArgs[0] -PathType Container)) {{
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[0] -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+    if (($cjArgs.Count -eq 1) -and ($first -ceq '-')) {{
+        Microsoft.PowerShell.Management\Set-Location -Path '-' -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+    if (($first -ceq '-Path') -and ($cjArgs.Count -eq 2)) {{
+        Microsoft.PowerShell.Management\Set-Location -Path $cjArgs[1] -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+    if (($first -ceq '-LiteralPath') -and ($cjArgs.Count -eq 2)) {{
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[1] -ErrorAction Stop
+        $global:__cj_down_route = $null
+        return
+    }}
+    if ($first.StartsWith('-') -and -not (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ throw "cj: unsupported PowerShell cd option: $first" }}
+
+    $navArg = if ($cjArgs.Count -eq 1) {{ $first }} elseif (($cjArgs.Count -eq 2) -and (($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ [string]$cjArgs[1] }} else {{ '' }}
+    $before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
+    $invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
+    $hadRoute = Test-Path Env:CJ_INTERNAL_DOWN_ROUTE
+    $oldRoute = $env:CJ_INTERNAL_DOWN_ROUTE
+    $configArgs = $script:__cj_config
+    $executable = $script:__cj_executable.Path
+    try {{
+        $env:CJ_INTERNAL_DOWN_ROUTE = if ($null -eq $global:__cj_down_route) {{ '' }} else {{ $global:__cj_down_route }}
+        $target = @(& $executable @configArgs @invokeArgs)
+        $status = $LASTEXITCODE
+    }} finally {{
+        if ($hadRoute) {{ $env:CJ_INTERNAL_DOWN_ROUTE = $oldRoute }} else {{ Remove-Item Env:CJ_INTERNAL_DOWN_ROUTE -ErrorAction SilentlyContinue }}
+    }}
+    if ($status -ne 0) {{ throw "cj exited with status $status" }}
+    if ($target.Count -ne 1 -or [string]::IsNullOrEmpty($target[0])) {{ throw 'cj returned an invalid destination' }}
+    Microsoft.PowerShell.Management\Set-Location -LiteralPath $target[0] -ErrorAction Stop
+    $after = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
+
+    if ((Test-CjRepeated $navArg $script:__cj_navigate_up) -and -not $after.Equals($before, $script:__cj_path_comparison)) {{
+        if (($null -eq $global:__cj_down_route) -or -not (Test-CjDescendant $before $global:__cj_down_route)) {{
+            $global:__cj_down_route = $before
+        }}
+    }} elseif (Test-CjRepeated $navArg $script:__cj_navigate_down) {{
+        if (($null -ne $global:__cj_down_route) -and $after.Equals($global:__cj_down_route, $script:__cj_path_comparison)) {{ $global:__cj_down_route = $null }}
+    }} else {{
+        $global:__cj_down_route = $null
+    }}
+}}"#
+    ))
 }
 
 fn absolute(path: &Path) -> Result<std::path::PathBuf, String> {
@@ -177,14 +419,28 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn quote_nu(value: &str) -> String {
+    for count in 1.. {
+        let hashes = "#".repeat(count);
+        if !value.contains(&format!("'{hashes}")) {
+            return format!("r{hashes}'{value}'{hashes}");
+        }
+    }
+    unreachable!()
+}
+
+fn quote_powershell(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn wrapper_uses_command_and_builtin_boundaries() {
-        let output = render(Shell::Zsh, None, None, &Tickers::default()).unwrap();
-        assert!(output.contains("\\command cj \"$@\""));
+        let output = render(Shell::Zsh, None, None, &Config::default()).unwrap();
+        assert!(output.contains("\\command cj \"${_cj_args[@]}\""));
         assert!(output.contains("\\builtin cd -- \"$target\""));
         assert!(output.contains("-Z|--no-zoxide"));
         assert!(output.contains("\\builtin unalias cd"));
@@ -198,7 +454,7 @@ mod tests {
             Shell::Bash,
             Some(Path::new("it's here/config.toml")),
             None,
-            &Tickers::default(),
+            &Config::default(),
         )
         .unwrap();
         assert!(output.contains("it'\\''s here/config.toml'"));
@@ -218,21 +474,47 @@ mod tests {
             Shell::Bash,
             None,
             Some(KeyBinding::CtrlO),
-            &Tickers::default(),
+            &Config::default(),
         )
         .unwrap();
         assert!(bash.contains(r#"\builtin bind -x '"\C-o":_cj_worktree_widget'"#));
         assert!(bash.contains("\\command cj --pick-worktree"));
 
-        let zsh = render(
-            Shell::Zsh,
-            None,
-            Some(KeyBinding::AltO),
-            &Tickers::default(),
-        )
-        .unwrap();
+        let zsh = render(Shell::Zsh, None, Some(KeyBinding::AltO), &Config::default()).unwrap();
         assert!(zsh.contains("\\builtin bindkey '^[o' _cj_worktree_widget"));
         assert!(zsh.contains("\\builtin zle reset-prompt"));
+    }
+
+    #[test]
+    fn renders_environment_aware_nushell_integration() {
+        let output = render(
+            Shell::Nu,
+            Some(Path::new("it's config.toml")),
+            None,
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(output.contains("export def --env --wrapped __cj_cd"));
+        assert!(output.contains("export alias cd = __cj_cd"));
+        assert!(output.contains("^cj ...$config ...$invoke_args | complete"));
+        assert!(output.contains("r#'"));
+        assert!(!output.contains("eval"));
+    }
+
+    #[test]
+    fn renders_literal_powershell_integration() {
+        let output = render(
+            Shell::Pwsh,
+            Some(Path::new("it's config.toml")),
+            None,
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(output.contains("Microsoft.PowerShell.Management\\Set-Location -LiteralPath"));
+        assert!(output.contains("Get-Command cj -CommandType Application"));
+        assert!(output.contains("it''s config.toml'"));
+        assert!(output.contains("-ceq '-z'"));
+        assert!(!output.contains("Invoke-Expression"));
     }
 
     #[cfg(unix)]
@@ -247,7 +529,7 @@ mod tests {
             ),
             (Shell::Zsh, "zsh", &["-f", "-c"][..], "alias cd=false"),
         ] {
-            let generated = render(shell, None, None, &Tickers::default()).unwrap();
+            let generated = render(shell, None, None, &Config::default()).unwrap();
             let script = format!("set -e; {prelude}; eval \"$1\"; eval 'cd -Z /'; [[ $PWD == / ]]");
             let output = match std::process::Command::new(program)
                 .args(args)
@@ -277,7 +559,7 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         std::fs::create_dir_all(&new).unwrap();
 
-        let generated = render(Shell::Zsh, None, None, &Tickers::default()).unwrap();
+        let generated = render(Shell::Zsh, None, None, &Config::default()).unwrap();
         let output = std::process::Command::new("zsh")
             .args([
                 "-f",
