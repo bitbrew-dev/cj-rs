@@ -11,8 +11,9 @@ Usage:
 
 Options:
   -C, --config <PATH>       Use a different config.toml
+  -r, --raw                 Treat the target as a literal directory
   -z, --zoxide             Force zoxide resolution
-  -Z, --no-zoxide          Bypass zoxide and cj shortcuts
+  -Z, --no-zoxide          Disable zoxide while retaining cj shortcuts
   -w, --worktree           List this repository's worktrees
   -f, --format <FORMAT>    Worktree format: table or json [default: table]
   -R, --relative           Render worktree paths relative to the current directory
@@ -50,7 +51,8 @@ pub enum Command {
 pub enum ResolverOverride {
     Configured,
     Zoxide,
-    Builtin,
+    NoZoxide,
+    Raw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -100,7 +102,9 @@ impl Cli {
             } else if options && matches!(text, Some("-z" | "--zoxide")) {
                 set_resolver(&mut resolver, ResolverOverride::Zoxide)?;
             } else if options && matches!(text, Some("-Z" | "--no-zoxide")) {
-                set_resolver(&mut resolver, ResolverOverride::Builtin)?;
+                set_resolver(&mut resolver, ResolverOverride::NoZoxide)?;
+            } else if options && matches!(text, Some("-r" | "--raw")) {
+                set_resolver(&mut resolver, ResolverOverride::Raw)?;
             } else if options && matches!(text, Some("-w" | "--worktree")) {
                 worktree = true;
             } else if options && matches!(text, Some("-f" | "--format")) {
@@ -166,7 +170,7 @@ impl Cli {
 
 fn set_resolver(current: &mut ResolverOverride, requested: ResolverOverride) -> Result<(), String> {
     if *current != ResolverOverride::Configured && *current != requested {
-        return Err("--zoxide and --no-zoxide cannot be used together".into());
+        return Err("--raw, --zoxide, and --no-zoxide cannot be used together".into());
     }
     *current = requested;
     Ok(())
@@ -244,8 +248,32 @@ mod tests {
     fn rejects_conflicting_resolvers() {
         assert_eq!(
             Cli::parse(["-z", "-Z", "project"].map(Into::into)),
-            Err("--zoxide and --no-zoxide cannot be used together".into())
+            Err("--raw, --zoxide, and --no-zoxide cannot be used together".into())
         );
+        assert!(Cli::parse(["-r", "-z", "project"].map(Into::into)).is_err());
+        assert!(Cli::parse(["-r", "-Z", "project"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn distinguishes_raw_no_zoxide_and_relative() {
+        assert!(matches!(
+            Cli::parse(["-r", "top"].map(Into::into)).unwrap().command,
+            Command::Resolve {
+                resolver: ResolverOverride::Raw,
+                ..
+            }
+        ));
+        assert!(matches!(
+            Cli::parse(["-Z", "top"].map(Into::into)).unwrap().command,
+            Command::Resolve {
+                resolver: ResolverOverride::NoZoxide,
+                ..
+            }
+        ));
+        assert!(matches!(
+            Cli::parse(["-w", "-R"].map(Into::into)).unwrap().command,
+            Command::Worktrees { relative: true, .. }
+        ));
     }
 
     #[test]

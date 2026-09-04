@@ -13,6 +13,7 @@ pub struct Config {
     #[serde(rename = "key-bindings")]
     pub key_bindings: KeyBindings,
     pub keywords: Keywords,
+    pub tickers: Tickers,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -56,7 +57,13 @@ pub struct Keywords {
     pub top: Vec<String>,
     #[serde(rename = "main-worktree")]
     pub main_worktree: Vec<String>,
-    pub tickers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tickers {
+    pub navigate_up: String,
+    pub navigate_down: String,
 }
 
 impl Config {
@@ -69,8 +76,14 @@ impl Config {
         };
 
         match fs::read_to_string(&path) {
-            Ok(contents) => toml::from_str(&contents)
-                .map_err(|error| format!("invalid config {}: {error}", path.display())),
+            Ok(contents) => {
+                let config: Self = toml::from_str(&contents)
+                    .map_err(|error| format!("invalid config {}: {error}", path.display()))?;
+                config
+                    .validate()
+                    .map_err(|error| format!("invalid config {}: {error}", path.display()))?;
+                Ok(config)
+            }
             Err(error)
                 if explicit_path.is_none() && error.kind() == std::io::ErrorKind::NotFound =>
             {
@@ -86,6 +99,15 @@ impl Config {
             "linux" => self.key_bindings.linux,
             _ => KeyBinding::None,
         }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        validate_ticker("tickers.navigate_up", &self.tickers.navigate_up)?;
+        validate_ticker("tickers.navigate_down", &self.tickers.navigate_down)?;
+        if self.tickers.navigate_up == self.tickers.navigate_down {
+            return Err("tickers.navigate_up and tickers.navigate_down must differ".into());
+        }
+        Ok(())
     }
 }
 
@@ -120,9 +142,35 @@ impl Default for Keywords {
         Self {
             top: vec!["top".into()],
             main_worktree: vec!["origin".into(), "og".into()],
-            tickers: vec!["^".into()],
         }
     }
+}
+
+impl Default for Tickers {
+    fn default() -> Self {
+        Self {
+            navigate_up: "^".into(),
+            navigate_down: "v".into(),
+        }
+    }
+}
+
+const ALLOWED_TICKERS: &[char] = &['^', 'v', 'u', 'd', 'j', 'k'];
+
+fn validate_ticker(name: &str, ticker: &str) -> Result<(), String> {
+    let mut characters = ticker.chars();
+    let Some(character) = characters.next() else {
+        return Err(format!("{name} must be exactly one character"));
+    };
+    if characters.next().is_some() {
+        return Err(format!("{name} must be exactly one character"));
+    }
+    if !ALLOWED_TICKERS.contains(&character) {
+        return Err(format!(
+            "{name} {ticker:?} is not allowed; allowed values: ^, v, u, d, j, k"
+        ));
+    }
+    Ok(())
 }
 
 fn default_config_path() -> Option<PathBuf> {
@@ -160,6 +208,7 @@ mod tests {
         assert_eq!(config.programs.zoxide, Path::new("/opt/bin/zoxide"));
         assert_eq!(config.programs.fzf, Path::new("fzf"));
         assert_eq!(config.key_bindings.macos, KeyBinding::CtrlO);
+        assert_eq!(config.tickers, Tickers::default());
     }
 
     #[test]
@@ -177,5 +226,32 @@ mod tests {
             Some("/home/me/.config/cj/config.toml".into())
         );
         assert_eq!(config_path_from(None, Some("".into())), None);
+    }
+
+    #[test]
+    fn validates_navigation_tickers() {
+        for invalid in [
+            "", "vv", ">", "<", "|", "&", ";", "$", "'", "\"", "*", "?", "\\", " ", "\t",
+        ] {
+            let mut config = Config::default();
+            config.tickers.navigate_down = invalid.into();
+            assert!(
+                config
+                    .validate()
+                    .unwrap_err()
+                    .contains("tickers.navigate_down")
+            );
+        }
+
+        let mut config = Config::default();
+        config.tickers.navigate_up = "k".into();
+        config.tickers.navigate_down = "j".into();
+        assert_eq!(config.validate(), Ok(()));
+
+        config.tickers.navigate_down = "k".into();
+        assert_eq!(
+            config.validate(),
+            Err("tickers.navigate_up and tickers.navigate_down must differ".into())
+        );
     }
 }

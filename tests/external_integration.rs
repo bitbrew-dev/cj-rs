@@ -38,7 +38,7 @@ fn forced_zoxide_preserves_arguments_and_exact_destination() {
     let output = fixture.zoxide_command("success").output().expect("run cj");
 
     assert_success(&output);
-    assert_eq!(output.stdout, destination(&fixture.destination));
+    assert_eq!(output.stdout, path_output(&fixture.destination));
     assert!(output.stderr.is_empty());
     assert_eq!(
         nul_strings(&fs::read(&fixture.args).expect("read zoxide arguments")),
@@ -50,6 +50,64 @@ fn forced_zoxide_preserves_arguments_and_exact_destination() {
             "two words",
             "quo'te"
         ]
+    );
+}
+
+#[test]
+fn raw_and_no_zoxide_keep_distinct_resolver_semantics() {
+    let fixture = GitFixture::new("resolver-modes");
+    let zoxide = fixture.temp.path().join("fake bin/zoxide");
+    let config = fixture.temp.path().join("resolver config.toml");
+    let args = fixture.temp.path().join("zoxide args");
+    let destination = fixture.temp.path().join("zoxide destination");
+    fs::create_dir_all(&destination).expect("create zoxide destination");
+    write_executable(&zoxide, ZOXIDE);
+    write_config(&config, &zoxide, Path::new("/missing/fzf"));
+
+    for target in ["top", "^^"] {
+        let raw = cj(&fixture.main_nested, fixture.temp.path())
+            .arg("-C")
+            .arg(&config)
+            .args(["-r", target])
+            .output()
+            .expect("run raw resolver");
+        assert_success(&raw);
+        assert_eq!(raw.stdout, format!("{target}\n").as_bytes());
+    }
+
+    let top = cj(&fixture.main_nested, fixture.temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["-Z", "top"])
+        .output()
+        .expect("run no-zoxide shortcut");
+    assert_success(&top);
+    assert_eq!(top.stdout, path_output(&fixture.main));
+
+    let up = cj(&fixture.main_nested, fixture.temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["-Z", "^^"])
+        .output()
+        .expect("run no-zoxide ticker");
+    assert_success(&up);
+    assert_eq!(up.stdout, b"../..\n");
+    assert!(!args.exists(), "raw and no-zoxide must not run zoxide");
+
+    let forced = cj(&fixture.main_nested, fixture.temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["-z", "^^"])
+        .env("CJ_FAKE_ARGS", &args)
+        .env("CJ_FAKE_MODE", "success")
+        .env("CJ_FAKE_DEST", &destination)
+        .output()
+        .expect("run forced zoxide");
+    assert_success(&forced);
+    assert_eq!(forced.stdout, path_output(&destination));
+    assert_eq!(
+        nul_strings(&fs::read(args).expect("read zoxide arguments")).last(),
+        Some(&"^^")
     );
 }
 
@@ -72,7 +130,7 @@ fn fzf_uses_nul_protocol_and_returns_selected_worktree() {
     let output = fixture.command("success").output().expect("run cj picker");
 
     assert_success(&output);
-    assert_eq!(output.stdout, destination(&fixture.git.linked));
+    assert_eq!(output.stdout, path_output(&fixture.git.linked));
     assert!(output.stderr.is_empty());
     assert_eq!(
         nul_strings(&fs::read(&fixture.args).expect("read fzf arguments")),
@@ -159,7 +217,7 @@ fn generated_wrappers_jump_and_propagate_failures() {
         };
         exercised += 1;
         assert_success(&success);
-        assert_eq!(success.stdout, destination(&fixture.destination));
+        assert_eq!(success.stdout, path_output(&fixture.destination));
         assert!(success.stderr.is_empty());
 
         let failed = shell_command(shell, &init.stdout, "eval \"$1\"; cd -z \"$2\" \"$3\"")
@@ -274,7 +332,7 @@ fn shell_command(shell: &str, setup: &[u8], script: &str) -> Command {
     command
 }
 
-fn destination(path: &Path) -> Vec<u8> {
+fn path_output(path: &Path) -> Vec<u8> {
     format!("{}\n", path.display()).into_bytes()
 }
 
