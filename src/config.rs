@@ -1,11 +1,12 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub behavior: Behavior,
@@ -14,36 +15,38 @@ pub struct Config {
     pub key_bindings: KeyBindings,
     pub keywords: Keywords,
     pub tickers: Tickers,
+    pub aliases: BTreeMap<String, PathBuf>,
+    pub mounts: BTreeMap<String, MountSpec>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Behavior {
     pub default: DefaultResolver,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DefaultResolver {
     Zoxide,
     Builtin,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Programs {
     pub zoxide: PathBuf,
     pub fzf: PathBuf,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyBindings {
     pub macos: KeyBinding,
     pub linux: KeyBinding,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeyBinding {
     CtrlO,
@@ -51,7 +54,7 @@ pub enum KeyBinding {
     None,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keywords {
     pub top: Vec<String>,
@@ -59,11 +62,27 @@ pub struct Keywords {
     pub main_worktree: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tickers {
     pub navigate_up: String,
     pub navigate_down: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MountSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<MountProvider>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MountProvider {
+    Icloud,
+    GoogleDrive,
 }
 
 impl Config {
@@ -101,13 +120,41 @@ impl Config {
         }
     }
 
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         validate_ticker("tickers.navigate_up", &self.tickers.navigate_up)?;
         validate_ticker("tickers.navigate_down", &self.tickers.navigate_down)?;
         if self.tickers.navigate_up == self.tickers.navigate_down {
             return Err("tickers.navigate_up and tickers.navigate_down must differ".into());
         }
+        for (name, path) in &self.aliases {
+            validate_name("alias", name)?;
+            validate_config_path(&format!("aliases.{name}"), path)?;
+        }
+        for (name, mount) in &self.mounts {
+            validate_name("mount", name)?;
+            if self.aliases.contains_key(name) {
+                return Err(format!(
+                    "name {name:?} is used by both an alias and a mount"
+                ));
+            }
+            mount.validate(name)?;
+        }
         Ok(())
+    }
+}
+
+impl MountSpec {
+    fn validate(&self, name: &str) -> Result<(), String> {
+        match (&self.path, self.provider) {
+            (Some(path), None) => validate_config_path(&format!("mounts.{name}.path"), path),
+            (None, Some(_)) => Ok(()),
+            (None, None) => Err(format!(
+                "mounts.{name} must specify exactly one of path or provider"
+            )),
+            (Some(_), Some(_)) => Err(format!(
+                "mounts.{name} cannot specify both path and provider"
+            )),
+        }
     }
 }
 
@@ -157,6 +204,30 @@ impl Default for Tickers {
 
 const ALLOWED_TICKERS: &[char] = &['^', 'v', 'u', 'd', 'j', 'k'];
 
+fn validate_name(kind: &str, name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{kind} name must not be empty"));
+    }
+    if name.contains(['\0', '\n', '\r']) {
+        return Err(format!("{kind} name {name:?} must fit on one line"));
+    }
+    Ok(())
+}
+
+fn validate_config_path(name: &str, path: &Path) -> Result<(), String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| format!("{name} must be valid UTF-8"))?;
+    if value.contains(['\0', '\n', '\r']) {
+        return Err(format!("{name} must fit on one line"));
+    }
+    if path.is_absolute() || value == "~" || value.starts_with("~/") {
+        Ok(())
+    } else {
+        Err(format!("{name} must be absolute or start with ~/"))
+    }
+}
+
 fn validate_ticker(name: &str, ticker: &str) -> Result<(), String> {
     let mut characters = ticker.chars();
     let Some(character) = characters.next() else {
@@ -173,7 +244,7 @@ fn validate_ticker(name: &str, ticker: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn default_config_path() -> Option<PathBuf> {
+pub fn default_config_path() -> Option<PathBuf> {
     config_path_from(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME"))
 }
 
@@ -253,5 +324,91 @@ mod tests {
             config.validate(),
             Err("tickers.navigate_up and tickers.navigate_down must differ".into())
         );
+    }
+
+    #[test]
+    fn validates_aliases_mounts_and_name_collisions() {
+        let absolute = env::temp_dir().join("CJ Tests/it's mounted");
+        let mut config = Config::default();
+        config.aliases.insert("code".into(), "~/Git".into());
+        config.mounts.insert(
+            "external-ssd".into(),
+            MountSpec {
+                path: Some(absolute),
+                provider: None,
+            },
+        );
+        config.mounts.insert(
+            "google-work".into(),
+            MountSpec {
+                path: None,
+                provider: Some(MountProvider::GoogleDrive),
+            },
+        );
+        assert_eq!(config.validate(), Ok(()));
+
+        config.mounts.insert(
+            "code".into(),
+            MountSpec {
+                path: Some("/mnt/code".into()),
+                provider: None,
+            },
+        );
+        assert_eq!(
+            config.validate(),
+            Err("name \"code\" is used by both an alias and a mount".into())
+        );
+    }
+
+    #[test]
+    fn mount_requires_exactly_one_source() {
+        let mut config = Config::default();
+        config.mounts.insert("empty".into(), MountSpec::default());
+        assert!(config.validate().unwrap_err().contains("exactly one"));
+
+        config.mounts.insert(
+            "empty".into(),
+            MountSpec {
+                path: Some("/mnt/example".into()),
+                provider: Some(MountProvider::Icloud),
+            },
+        );
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("cannot specify both")
+        );
+    }
+
+    #[test]
+    fn paths_must_be_absolute_tilde_based_and_line_safe() {
+        for invalid in ["relative/path", "~someone/path", "/tmp/line\nbreak"] {
+            let mut config = Config::default();
+            config.aliases.insert("bad".into(), invalid.into());
+            assert!(config.validate().is_err(), "accepted {invalid:?}");
+        }
+        let mut config = Config::default();
+        config.aliases.insert("quote".into(), "~/it's here".into());
+        assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn serializes_maps_deterministically_and_round_trips_providers() {
+        let mut config = Config::default();
+        config.aliases.insert("z-last".into(), "~/Z".into());
+        config.aliases.insert("a-first".into(), "~/A".into());
+        config.mounts.insert(
+            "icloud".into(),
+            MountSpec {
+                path: None,
+                provider: Some(MountProvider::Icloud),
+            },
+        );
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert!(encoded.find("a-first").unwrap() < encoded.find("z-last").unwrap());
+        assert!(encoded.contains("provider = \"icloud\""));
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, config);
     }
 }
