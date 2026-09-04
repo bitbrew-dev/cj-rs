@@ -5,16 +5,14 @@ on:
     inputs:
       prompt:
         description: "If you are sure to launch a new release, put the value to true."
-        default: "false"
+        default: false
         required: true
-        type: choice
-        options:
-          - "true"
-          - "false"
+        type: boolean
 
 jobs:
   semantic-release:
     name: semantic-release
+    if: ${{ inputs.prompt }}
     uses: bitbrew-dev/r-workflows/.github/workflows/semantic-release.yml@main
     # uses: bitbrew-dev/reusable-workflows/.github/workflows/semantic-release.yml@main
     permissions:
