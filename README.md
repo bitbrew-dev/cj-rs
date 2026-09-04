@@ -1,8 +1,9 @@
 # cj
 
 `cj` is a small shell companion for jumping between useful directories. It adds
-Git-aware shortcuts, optional zoxide resolution, and an fzf worktree picker while
-leaving the final directory change to your shell's real `cd` builtin.
+named aliases and mounts, Git-aware shortcuts, optional zoxide resolution, and an
+fzf worktree picker while leaving the final directory change to your shell's real
+`cd` builtin.
 
 ## Install
 
@@ -29,6 +30,8 @@ Once the shell integration is loaded, use `cd` normally:
 ```console
 cd src          # existing directories always use the builtin directly
 cd project      # otherwise use the configured resolver (zoxide by default)
+cd code         # a configured alias
+cd external-ssd # a configured mount
 cd top          # top level of the current Git repository
 cd origin       # main worktree; "og" is also enabled by default
 cd ^^^          # three directories up
@@ -42,14 +45,19 @@ directory change clears that route. Existing directories always win over tickers
 Resolver flags make the choice explicit:
 
 ```console
-cd -z project   # require zoxide; missing/failing zoxide is an error
-cd -Z top       # disable zoxide while retaining cj shortcuts
-cd -r path      # treat path literally; bypass shortcuts and zoxide
+cd -z project   # use only zoxide; missing/failing zoxide is an error
+cd -Z code      # disable zoxide; retain aliases, mounts, tickers, and Git shortcuts
+cd -r code      # treat "code" literally; bypass all cj resolution and zoxide
 ```
 
 When zoxide is the configured default but is unavailable or cannot find a match,
 `cj` falls back to normal literal-path behavior. `cj` invokes the configured zoxide
 executable directly; it does not run commands through a shell.
+
+For ordinary resolution, the first match wins: an existing directory, navigation
+ticker, alias, mount, Git keyword, then zoxide or the literal fallback. A configured
+alias or mount whose destination is unavailable is an error; it does not fall
+through to a later resolver.
 
 ## Worktrees
 
@@ -80,7 +88,7 @@ worktree listing do not.
 ## Configuration
 
 The default config path is `${XDG_CONFIG_HOME:-$HOME/.config}/cj/config.toml`.
-Every section and field is optional. The complete defaults are:
+Every section and field is optional. A complete example is:
 
 ```toml
 [behavior]
@@ -101,10 +109,25 @@ main-worktree = ["origin", "og"]
 [tickers]
 navigate_up = "^"
 navigate_down = "v"
+
+[aliases]
+code = "~/Git"
+downloads = "~/Downloads"
+
+[mounts]
+icloud = { provider = "icloud" }
+google-work = { path = "~/Library/CloudStorage/GoogleDrive-work@example.com" }
+external-ssd = { path = "/Volumes/External SSD" }
 ```
 
 Program values may be executable names found on `PATH` or explicit executable
 paths. Key bindings accept `ctrl-o`, `alt-o`, or `none`.
+
+Alias and explicit mount paths must be absolute or start with `~/`; cj expands that
+leading home marker itself and does not evaluate shell variables, globs, or command
+substitutions. Paths containing spaces or single quotes are preserved. A mount must
+specify exactly one `path` or provider; supported providers are `icloud` and
+`google-drive`. Alias and mount names may not collide.
 
 Navigation tickers are configurable single characters. Allowed values are `^`,
 `v`, `u`, `d`, `j`, and `k`; the intentionally small allowlist excludes shell
@@ -124,6 +147,43 @@ eval "$(cj -C "$HOME/.config/cj/work.toml" init zsh --setup-key-binding)"
 
 There is no configurable `cd` executable: `cd` is a shell builtin. `cj` only prints
 the destination, and the generated wrapper calls `builtin cd` in the parent shell.
+
+## Config initialization and mount discovery
+
+Create a new config at the default path, or at the path selected with `-C`:
+
+```console
+cj config init
+cj -C ~/.config/cj/work.toml config init
+```
+
+Initialization never overwrites an existing file. On macOS, `--preamp` scans for
+reachable mounts and adds only unambiguous results as explicit absolute `path`
+entries:
+
+```console
+cj config init --preamp
+```
+
+Discovery checks the standard iCloud Drive directory, Google Drive directories
+under `~/Library/CloudStorage/GoogleDrive-*` and `/Volumes/GoogleDrive*`, and mounted
+directories under `/Volumes`. It uses the fixed names `icloud` and `google-drive`;
+other volume labels are converted to names such as `External SSD` → `external-ssd`.
+Ambiguous Google accounts and name collisions are reported and not written.
+Automatic discovery and provider-based mounts are macOS-only; explicit mount paths
+continue to work on other platforms.
+
+Inspect discoverable mounts without changing the config:
+
+```console
+cj mounts scan
+cj mounts scan -f json
+cj -v mounts scan
+```
+
+The default format is a table. JSON is available for tooling, and the global
+`-v`/`--verbose` flag includes discovery details such as skipped candidates and
+ready-to-copy mount entries.
 
 ## License
 
