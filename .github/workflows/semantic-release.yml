@@ -81,7 +81,9 @@ jobs:
 
   publish-crate:
     name: publish cj-rs to crates.io
-    needs: semantic-release
+    needs:
+      - semantic-release
+      - build-binaries
     if: ${{ needs.semantic-release.outputs.new_release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
