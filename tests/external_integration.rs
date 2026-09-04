@@ -125,6 +125,29 @@ fn forced_zoxide_failure_has_exact_process_contract() {
 }
 
 #[test]
+fn unsafe_ticker_config_is_rejected_before_shell_generation() {
+    let temp = TempDir::new("unsafe-ticker");
+    let config = temp.path().join("unsafe ticker.toml");
+    fs::write(
+        &config,
+        "[tickers]\nnavigate_up = \"^\"\nnavigate_down = \">\"\n",
+    )
+    .expect("write unsafe config");
+
+    let output = cj(temp.path(), temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["init", "bash"])
+        .output()
+        .expect("run cj init");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("error is UTF-8");
+    assert!(stderr.contains("tickers.navigate_down \">\" is not allowed"));
+    assert!(stderr.contains("allowed values: ^, v, u, d, j, k"));
+}
+
+#[test]
 fn fzf_uses_nul_protocol_and_returns_selected_worktree() {
     let fixture = PickerFixture::new("fzf-success");
     let output = fixture.command("success").output().expect("run cj picker");
@@ -238,6 +261,108 @@ fn generated_wrappers_jump_and_propagate_failures() {
     assert!(exercised > 0, "neither bash nor zsh is available");
 }
 
+#[test]
+fn generated_wrappers_navigate_down_with_custom_tickers() {
+    let temp = TempDir::new("shell-navigation");
+    let root = temp.path().join("navigation root's path");
+    let a = root.join("a");
+    let b = a.join("b");
+    let leaf = b.join("c");
+    let unrelated = a.join("other");
+    let shadow_a = root.join("shadow/a");
+    let shadow_leaf = shadow_a.join("b/c");
+    let shadow_down = shadow_a.join("d");
+    for directory in [&leaf, &unrelated, &shadow_leaf, &shadow_down] {
+        fs::create_dir_all(directory).expect("create navigation directory");
+    }
+    let config = temp.path().join("navigation config's.toml");
+    fs::write(
+        &config,
+        "[behavior]\ndefault = \"builtin\"\n\n[tickers]\nnavigate_up = \"u\"\nnavigate_down = \"d\"\n",
+    )
+    .expect("write navigation config");
+    let binary_dir = temp.path().join("navigation binary dir");
+    fs::create_dir_all(&binary_dir).expect("create binary directory");
+    symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
+    let mut paths = vec![binary_dir];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let path = env::join_paths(paths).expect("join PATH");
+    let mut exercised = 0;
+
+    for shell in ["bash", "zsh"] {
+        let init = cj(&leaf, temp.path())
+            .arg("-C")
+            .arg(&config)
+            .args(["init", shell])
+            .output()
+            .expect("render navigation setup");
+        assert_success(&init);
+
+        let script = concat!(
+            "eval \"$1\"; ",
+            "cd uu; printf '%s\\000' \"$PWD\"; ",
+            "cd d; printf '%s\\000' \"$PWD\"; ",
+            "cd d; printf '%s\\000' \"$PWD\"; ",
+            "cd uu; cd dd; printf '%s\\000' \"$PWD\"; ",
+            "cd -Z uu; cd -Z dd; printf '%s\\000' \"$PWD\"; ",
+            "cd -r \"$2\"; printf '%s\\000' \"$PWD\""
+        );
+        let mut command = shell_with_setup(shell, &init.stdout, script);
+        command
+            .arg(&unrelated)
+            .current_dir(&leaf)
+            .env("PATH", &path);
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot run {shell}: {error}"),
+        };
+        exercised += 1;
+        assert_success(&output);
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            nul_strings(&output.stdout),
+            [
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+                leaf.to_str().unwrap(),
+                leaf.to_str().unwrap(),
+                leaf.to_str().unwrap(),
+                unrelated.to_str().unwrap()
+            ]
+        );
+
+        let mut no_history = shell_with_setup(shell, &init.stdout, "eval \"$1\"; cd d");
+        no_history.current_dir(&leaf).env("PATH", &path);
+        let no_history = no_history.output().expect("run available shell");
+        assert_eq!(no_history.status.code(), Some(2));
+        assert!(no_history.stdout.is_empty());
+        assert_eq!(
+            no_history.stderr,
+            b"cj: no remembered downward route; initialize cj shell integration\n"
+        );
+
+        let clear_script = "eval \"$1\"; cd uu; cd other; builtin cd ..; cd d";
+        let mut cleared = shell_with_setup(shell, &init.stdout, clear_script);
+        cleared.current_dir(&leaf).env("PATH", &path);
+        let cleared = cleared.output().expect("run available shell");
+        assert_eq!(cleared.status.code(), Some(2));
+        assert!(cleared.stdout.is_empty());
+        assert_eq!(
+            cleared.stderr,
+            b"cj: no remembered downward route; initialize cj shell integration\n"
+        );
+
+        let shadow_script = "eval \"$1\"; cd uu; cd d; printf '%s\\n' \"$PWD\"";
+        let mut shadowed = shell_with_setup(shell, &init.stdout, shadow_script);
+        shadowed.current_dir(&shadow_leaf).env("PATH", &path);
+        let shadowed = shadowed.output().expect("run available shell");
+        assert_success(&shadowed);
+        assert_eq!(shadowed.stdout, path_output(&shadow_down));
+    }
+    assert!(exercised > 0, "neither bash nor zsh is available");
+}
+
 struct ToolFixture {
     temp: TempDir,
     cwd: PathBuf,
@@ -319,6 +444,12 @@ impl PickerFixture {
 }
 
 fn shell_command(shell: &str, setup: &[u8], script: &str) -> Command {
+    let mut command = shell_with_setup(shell, setup, script);
+    command.args(["two words", "quo'te"]);
+    command
+}
+
+fn shell_with_setup(shell: &str, setup: &[u8], script: &str) -> Command {
     let mut command = Command::new(shell);
     if shell == "bash" {
         command.args(["--noprofile", "--norc"]);
@@ -327,8 +458,7 @@ fn shell_command(shell: &str, setup: &[u8], script: &str) -> Command {
     }
     command
         .args(["-c", script, "_"])
-        .arg(OsStr::from_bytes(setup))
-        .args(["two words", "quo'te"]);
+        .arg(OsStr::from_bytes(setup));
     command
 }
 
