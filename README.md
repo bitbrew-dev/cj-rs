@@ -11,17 +11,64 @@ fzf worktree picker while leaving the final directory change to your shell's rea
 cargo install cj-rs
 ```
 
-`cj` supports Bash and Zsh. Add one of these lines to your shell configuration:
+`cj` supports Bash, Zsh, Nushell, and PowerShell. Generate integration and
+completion files, then load them from the matching shell configuration. `cj`
+only prints source text; it never edits a shell configuration or profile.
+
+For Bash:
 
 ```bash
-# Bash: ~/.bashrc
-eval "$(cj init bash)"
+mkdir -p ~/.config/cj
+cj init bash > ~/.config/cj/init.bash
+cj completions bash > ~/.config/cj/completions.bash
 
-# Zsh: ~/.zshrc
-eval "$(cj init zsh)"
+# Add to ~/.bashrc:
+source ~/.config/cj/init.bash
+source ~/.config/cj/completions.bash
+```
+
+For Zsh:
+
+```zsh
+mkdir -p ~/.config/cj
+cj init zsh > ~/.config/cj/init.zsh
+cj completions zsh > ~/.config/cj/completions.zsh
+
+# Add to ~/.zshrc:
+autoload -Uz compinit && compinit
+source ~/.config/cj/init.zsh
+source ~/.config/cj/completions.zsh
+```
+
+For Nushell:
+
+```nu
+mkdir ~/.config/nushell
+cj init nu | save --force ~/.config/nushell/cj.nu
+cj completions nu | save --force ~/.config/nushell/cj-completions.nu
+
+# Add to config.nu:
+use ~/.config/nushell/cj.nu *
+use ~/.config/nushell/cj-completions.nu *
+```
+
+For PowerShell 7:
+
+```powershell
+$CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
+New-Item -ItemType Directory -Force $CjConfig | Out-Null
+cj init powershell | Set-Content (Join-Path $CjConfig 'init.ps1')
+cj completions powershell | Set-Content (Join-Path $CjConfig 'completions.ps1')
+
+# Add these lines to $PROFILE:
+$CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
+. (Join-Path $CjConfig 'init.ps1')
+. (Join-Path $CjConfig 'completions.ps1')
 ```
 
 Restart the shell or source its configuration after making the change.
+`pwsh` is accepted as an input alias for `powershell`; generated source and
+completion candidates use the canonical `powershell` name.
 
 ## Jumping
 
@@ -132,8 +179,10 @@ specify exactly one `path` or provider; supported providers are `icloud` and
 Navigation tickers are configurable single characters. Allowed values are `^`,
 `v`, `u`, `d`, `j`, and `k`; the intentionally small allowlist excludes shell
 operators and other characters that are unsafe to type unquoted. Up and down must
-use different values. After changing tickers or key bindings, regenerate the shell
-integration by starting a new shell or sourcing its configuration again.
+use different values. After changing tickers or key bindings, rerun the matching
+`cj init` command and reload the generated file.
+Completions contain a deterministic snapshot of configured keywords, aliases,
+mounts, and tickers, so regenerate the completion file after changing them.
 
 When migrating from 0.1.0, replace `keywords.tickers = ["^"]` with the new
 top-level `[tickers]` section shown above.
@@ -142,11 +191,13 @@ Use `-C` or `--config` to select a different file. When generating shell setup,
 the selected config path is embedded safely in the generated wrapper:
 
 ```bash
-eval "$(cj -C "$HOME/.config/cj/work.toml" init zsh --setup-key-binding)"
+cj -C "$HOME/.config/cj/work.toml" init zsh --setup-key-binding \
+  > "$HOME/.config/cj/init.zsh"
 ```
 
 There is no configurable `cd` executable: `cd` is a shell builtin. `cj` only prints
-the destination, and the generated wrapper calls `builtin cd` in the parent shell.
+the destination, and the generated integration invokes the parent shell's native
+location command (`cd` or `Set-Location`).
 
 ## Config initialization and mount discovery
 

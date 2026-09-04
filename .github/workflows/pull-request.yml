@@ -59,6 +59,14 @@ jobs:
         run: |
           rustup toolchain install
           rustc --version
+      - name: install shell test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+          cargo install nu@0.115.1 --locked
+          zsh --version
+          nu --version
+          pwsh --version
       - name: check formatting
         run: cargo fmt --all -- --check
       - name: run cargo check
@@ -71,6 +79,7 @@ jobs:
         run: cargo test --verbose
     env:
       CARGO_TERM_COLOR: always
+      CJ_REQUIRE_SHELLS: "1"
 
   pr-labeler:
     name: pr labeler
