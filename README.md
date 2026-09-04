@@ -32,13 +32,19 @@ cd project      # otherwise use the configured resolver (zoxide by default)
 cd top          # top level of the current Git repository
 cd origin       # main worktree; "og" is also enabled by default
 cd ^^^          # three directories up
+cd vvv          # three levels back down along the remembered route
 ```
+
+Downward navigation is browser-style: moving up remembers the directory you left,
+and the down ticker walks back toward it one level at a time. A different successful
+directory change clears that route. Existing directories always win over tickers.
 
 Resolver flags make the choice explicit:
 
 ```console
 cd -z project   # require zoxide; missing/failing zoxide is an error
-cd -Z path      # bypass cj and zoxide; invoke the real cd builtin
+cd -Z top       # disable zoxide while retaining cj shortcuts
+cd -r path      # treat path literally; bypass shortcuts and zoxide
 ```
 
 When zoxide is the configured default but is unavailable or cannot find a match,
@@ -91,11 +97,23 @@ linux = "alt-o"
 [keywords]
 top = ["top"]
 main-worktree = ["origin", "og"]
-tickers = ["^"]
+
+[tickers]
+navigate_up = "^"
+navigate_down = "v"
 ```
 
 Program values may be executable names found on `PATH` or explicit executable
 paths. Key bindings accept `ctrl-o`, `alt-o`, or `none`.
+
+Navigation tickers are configurable single characters. Allowed values are `^`,
+`v`, `u`, `d`, `j`, and `k`; the intentionally small allowlist excludes shell
+operators and other characters that are unsafe to type unquoted. Up and down must
+use different values. After changing tickers or key bindings, regenerate the shell
+integration by starting a new shell or sourcing its configuration again.
+
+When migrating from 0.1.0, replace `keywords.tickers = ["^"]` with the new
+top-level `[tickers]` section shown above.
 
 Use `-C` or `--config` to select a different file. When generating shell setup,
 the selected config path is embedded safely in the generated wrapper:
