@@ -54,6 +54,10 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
+      - name: install pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
       - name: check formatting
         run: cargo fmt --all -- --check
       - name: run cargo check
