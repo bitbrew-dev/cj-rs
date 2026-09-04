@@ -77,11 +77,13 @@ impl Cli {
         let mut setup_key_binding = false;
         let mut targets = Vec::new();
         let mut options = true;
+        let mut force_resolve = false;
 
         while let Some(argument) = args.next() {
             let text = argument.to_str();
             if options && text == Some("--") {
                 options = false;
+                force_resolve = true;
             } else if options && matches!(text, Some("-h" | "--help")) {
                 return Ok(Self {
                     config_path,
@@ -118,7 +120,10 @@ impl Cli {
             }
         }
 
-        let command = if targets.first().and_then(|arg| arg.to_str()) == Some("init") {
+        let command = if !force_resolve
+            && resolver == ResolverOverride::Configured
+            && targets.first().and_then(|arg| arg.to_str()) == Some("init")
+        {
             parse_init(
                 &targets,
                 setup_key_binding,
@@ -134,6 +139,9 @@ impl Cli {
             }
             if resolver != ResolverOverride::Configured || setup_key_binding {
                 return Err("resolver and setup flags cannot be used with --worktree".into());
+            }
+            if pick && (format.is_some() || relative) {
+                return Err("--format and --relative cannot be used with --pick-worktree".into());
             }
             Command::Worktrees {
                 format: format.unwrap_or(OutputFormat::Table),
@@ -246,5 +254,24 @@ mod tests {
         assert!(
             matches!(parsed.command, Command::Resolve { targets, .. } if targets == ["-project"])
         );
+    }
+
+    #[test]
+    fn explicit_resolution_allows_init_as_a_target() {
+        assert!(matches!(
+            Cli::parse(["-z", "init"].map(Into::into)).unwrap().command,
+            Command::Resolve { targets, resolver: ResolverOverride::Zoxide }
+                if targets == ["init"]
+        ));
+        assert!(matches!(
+            Cli::parse(["--", "init"].map(Into::into)).unwrap().command,
+            Command::Resolve { targets, .. } if targets == ["init"]
+        ));
+    }
+
+    #[test]
+    fn picker_rejects_ignored_output_flags() {
+        assert!(Cli::parse(["--pick-worktree", "-R"].map(Into::into)).is_err());
+        assert!(Cli::parse(["--pick-worktree", "-f", "json"].map(Into::into)).is_err());
     }
 }
