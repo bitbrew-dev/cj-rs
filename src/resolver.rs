@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::process::{Command, Output};
 
 use crate::cli::ResolverOverride;
@@ -9,16 +9,17 @@ pub fn resolve(
     targets: &[OsString],
     resolver: ResolverOverride,
     config: &Config,
+    navigation: &NavigationContext,
 ) -> Result<PathBuf, String> {
+    if resolver == ResolverOverride::Raw {
+        return literal_target(targets);
+    }
     if targets.is_empty() {
         return std::env::var_os("HOME")
             .map(PathBuf::from)
             .ok_or("HOME is not set".into());
     }
 
-    if resolver == ResolverOverride::Builtin {
-        return literal_target(targets);
-    }
     if resolver == ResolverOverride::Zoxide {
         return query_zoxide(targets, config).map_err(zoxide_error);
     }
@@ -30,6 +31,12 @@ pub fn resolve(
         }
 
         if let Some(text) = targets[0].to_str() {
+            if let Some(count) = repeated_count(text, &config.tickers.navigate_up) {
+                return Ok(parent_path(count));
+            }
+            if let Some(count) = repeated_count(text, &config.tickers.navigate_down) {
+                return navigate_down(count, navigation);
+            }
             if config.keywords.top.iter().any(|keyword| keyword == text) {
                 return git_output(["rev-parse", "--show-toplevel"]);
             }
@@ -41,10 +48,11 @@ pub fn resolve(
             {
                 return main_worktree();
             }
-            if let Some(path) = parent_ticker(text, &config.keywords.tickers) {
-                return Ok(path);
-            }
         }
+    }
+
+    if resolver == ResolverOverride::NoZoxide {
+        return literal_target(targets);
     }
 
     match config.behavior.default {
@@ -52,6 +60,23 @@ pub fn resolve(
             query_zoxide(targets, config).or_else(|_| literal_target(targets))
         }
         DefaultResolver::Builtin => literal_target(targets),
+    }
+}
+
+pub struct NavigationContext {
+    cwd: PathBuf,
+    down_route: Option<PathBuf>,
+}
+
+impl NavigationContext {
+    pub fn from_process() -> Result<Self, String> {
+        Ok(Self {
+            cwd: std::env::current_dir()
+                .map_err(|error| format!("cannot read current directory: {error}"))?,
+            down_route: std::env::var_os("CJ_INTERNAL_DOWN_ROUTE")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
+        })
     }
 }
 
@@ -116,21 +141,45 @@ enum ZoxideFailure {
     Query(String),
 }
 
-fn parent_ticker(target: &str, tickers: &[String]) -> Option<PathBuf> {
-    tickers.iter().find_map(|ticker| {
-        if ticker.is_empty() {
-            return None;
-        }
-        let mut rest = target;
-        let mut path = PathBuf::new();
-        let mut count = 0;
-        while let Some(next) = rest.strip_prefix(ticker) {
-            path.push("..");
-            rest = next;
-            count += 1;
-        }
-        (count > 0 && rest.is_empty()).then_some(path)
-    })
+fn repeated_count(target: &str, ticker: &str) -> Option<usize> {
+    let ticker = ticker.chars().next()?;
+    let mut characters = target.chars();
+    let first = characters.next()?;
+    (first == ticker && characters.all(|character| character == ticker))
+        .then(|| target.chars().count())
+}
+
+fn parent_path(count: usize) -> PathBuf {
+    std::iter::repeat_n("..", count).collect()
+}
+
+fn navigate_down(count: usize, navigation: &NavigationContext) -> Result<PathBuf, String> {
+    let route = navigation
+        .down_route
+        .as_deref()
+        .ok_or("no remembered downward route; initialize cj shell integration")?;
+    let remaining = route
+        .strip_prefix(&navigation.cwd)
+        .map_err(|_| "remembered downward route is not below the current directory")?;
+    let components = remaining
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if components.is_empty() {
+        return Err("already at the end of the remembered downward route".into());
+    }
+    if count > components.len() {
+        return Err(format!(
+            "cannot navigate down {count} levels; only {} remembered",
+            components.len()
+        ));
+    }
+    Ok(navigation
+        .cwd
+        .join(components[..count].iter().collect::<PathBuf>()))
 }
 
 fn main_worktree() -> Result<PathBuf, String> {
@@ -171,17 +220,23 @@ mod tests {
 
     #[test]
     fn repeated_ticker_becomes_parent_path() {
-        assert_eq!(parent_ticker("^^^", &["^".into()]), Some("../../..".into()));
-        assert_eq!(parent_ticker("^x", &["^".into()]), None);
+        assert_eq!(repeated_count("^^^", "^"), Some(3));
+        assert_eq!(repeated_count("^x", "^"), None);
+        assert_eq!(parent_path(3), PathBuf::from("../../.."));
     }
 
     #[test]
-    fn builtin_override_preserves_literal_path() {
+    fn raw_override_requires_one_literal_path() {
         let config = Config::default();
+        let navigation = NavigationContext {
+            cwd: "/repo".into(),
+            down_route: None,
+        };
         assert_eq!(
-            resolve(&["top".into()], ResolverOverride::Builtin, &config),
+            resolve(&["top".into()], ResolverOverride::Raw, &config, &navigation,),
             Ok("top".into())
         );
+        assert!(resolve(&[], ResolverOverride::Raw, &config, &navigation).is_err());
     }
 
     #[test]
@@ -189,9 +244,17 @@ mod tests {
         let mut config = Config::default();
         config.programs.zoxide = "/definitely/missing/zoxide".into();
         assert!(
-            resolve(&["project".into()], ResolverOverride::Zoxide, &config)
-                .unwrap_err()
-                .contains("not found")
+            resolve(
+                &["project".into()],
+                ResolverOverride::Zoxide,
+                &config,
+                &NavigationContext {
+                    cwd: "/repo".into(),
+                    down_route: None,
+                },
+            )
+            .unwrap_err()
+            .contains("not found")
         );
     }
 
@@ -200,8 +263,27 @@ mod tests {
         let mut config = Config::default();
         config.programs.zoxide = "/definitely/missing/zoxide".into();
         assert_eq!(
-            resolve(&["project".into()], ResolverOverride::Configured, &config),
+            resolve(
+                &["project".into()],
+                ResolverOverride::Configured,
+                &config,
+                &NavigationContext {
+                    cwd: "/repo".into(),
+                    down_route: None,
+                },
+            ),
             Ok(Path::new("project").into())
         );
+    }
+
+    #[test]
+    fn navigates_toward_a_remembered_descendant() {
+        let navigation = NavigationContext {
+            cwd: "/repo/a".into(),
+            down_route: Some("/repo/a/b/c".into()),
+        };
+        assert_eq!(navigate_down(1, &navigation), Ok("/repo/a/b".into()));
+        assert_eq!(navigate_down(2, &navigation), Ok("/repo/a/b/c".into()));
+        assert!(navigate_down(3, &navigation).is_err());
     }
 }

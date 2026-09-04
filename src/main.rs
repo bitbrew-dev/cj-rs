@@ -14,7 +14,8 @@ fn execute(cli: Cli) -> Result<String, String> {
         Command::Version => Ok(concat!("cj ", env!("CARGO_PKG_VERSION")).into()),
         Command::Resolve { targets, resolver } => {
             let config = config::Config::load(cli.config_path.as_deref())?;
-            resolver::resolve(&targets, resolver, &config)
+            let navigation = resolver::NavigationContext::from_process()?;
+            resolver::resolve(&targets, resolver, &config, &navigation)
                 .map(|path| path.to_string_lossy().into_owned())
         }
         Command::Init {
