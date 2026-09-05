@@ -77,6 +77,8 @@ pub struct MountSpec {
     pub path: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<MountProvider>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<OneDriveAccount>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -84,6 +86,14 @@ pub struct MountSpec {
 pub enum MountProvider {
     Icloud,
     GoogleDrive,
+    OneDrive,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OneDriveAccount {
+    Personal,
+    Business,
 }
 
 impl Config {
@@ -153,14 +163,21 @@ impl Config {
 
 impl MountSpec {
     fn validate(&self, name: &str) -> Result<(), String> {
-        match (&self.path, self.provider) {
-            (Some(path), None) => validate_config_path(&format!("mounts.{name}.path"), path),
-            (None, Some(_)) => Ok(()),
-            (None, None) => Err(format!(
+        match (&self.path, self.provider, self.account) {
+            (Some(path), None, None) => validate_config_path(&format!("mounts.{name}.path"), path),
+            (None, Some(MountProvider::OneDrive), _) => Ok(()),
+            (None, Some(_), None) => Ok(()),
+            (None, None, None) => Err(format!(
                 "mounts.{name} must specify exactly one of path or provider"
             )),
-            (Some(_), Some(_)) => Err(format!(
-                "mounts.{name} cannot specify both path and provider"
+            (Some(_), _, _) => Err(format!(
+                "mounts.{name} cannot specify both path and provider or account"
+            )),
+            (None, None, Some(_)) => Err(format!(
+                "mounts.{name}.account requires provider = \"onedrive\""
+            )),
+            (None, Some(_), Some(_)) => Err(format!(
+                "mounts.{name}.account is supported only by provider = \"onedrive\""
             )),
         }
     }
@@ -230,10 +247,27 @@ fn validate_config_path(name: &str, path: &Path) -> Result<(), String> {
     if value.contains(['\0', '\n', '\r']) {
         return Err(format!("{name} must fit on one line"));
     }
-    if path.is_absolute() || value == "~" || value.starts_with("~/") {
+    if path.is_absolute() || home_relative_suffix(value).is_some() {
         Ok(())
     } else {
-        Err(format!("{name} must be absolute or start with ~/"))
+        Err(format!(
+            "{name} must be absolute or start with ~/{}",
+            if cfg!(windows) { " or ~\\" } else { "" }
+        ))
+    }
+}
+
+pub(crate) fn home_relative_suffix(value: &str) -> Option<&str> {
+    if value == "~" {
+        Some("")
+    } else {
+        value.strip_prefix("~/").or_else(|| {
+            if cfg!(windows) {
+                value.strip_prefix("~\\")
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -384,6 +418,7 @@ mod tests {
             MountSpec {
                 path: Some(absolute),
                 provider: None,
+                account: None,
             },
         );
         config.mounts.insert(
@@ -391,6 +426,7 @@ mod tests {
             MountSpec {
                 path: None,
                 provider: Some(MountProvider::GoogleDrive),
+                account: None,
             },
         );
         assert_eq!(config.validate(), Ok(()));
@@ -400,6 +436,7 @@ mod tests {
             MountSpec {
                 path: Some("/mnt/code".into()),
                 provider: None,
+                account: None,
             },
         );
         assert_eq!(
@@ -426,6 +463,7 @@ mod tests {
             MountSpec {
                 path: Some("/mnt/example".into()),
                 provider: Some(MountProvider::Icloud),
+                account: None,
             },
         );
         assert!(
@@ -434,6 +472,27 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot specify both")
         );
+
+        let mut config = Config::default();
+        config.mounts.insert(
+            "work".into(),
+            MountSpec {
+                path: None,
+                provider: Some(MountProvider::OneDrive),
+                account: Some(OneDriveAccount::Business),
+            },
+        );
+        assert_eq!(config.validate(), Ok(()));
+
+        config.mounts.insert(
+            "invalid".into(),
+            MountSpec {
+                path: None,
+                provider: Some(MountProvider::Icloud),
+                account: Some(OneDriveAccount::Personal),
+            },
+        );
+        assert!(config.validate().unwrap_err().contains("onedrive"));
     }
 
     #[test]
@@ -458,6 +517,7 @@ mod tests {
             MountSpec {
                 path: None,
                 provider: Some(MountProvider::Icloud),
+                account: None,
             },
         );
         let encoded = toml::to_string_pretty(&config).unwrap();

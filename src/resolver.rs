@@ -100,7 +100,8 @@ fn resolve_mount(name: &str, mount: &MountSpec) -> Result<PathBuf, String> {
         .provider
         .ok_or_else(|| format!("mount {name:?} has no path or provider"))?;
     let context = DiscoveryContext::from_process()?;
-    mounts::resolve_provider(provider, &context).map_err(|error| format!("mount {name:?}: {error}"))
+    mounts::resolve_provider(provider, mount.account, &context)
+        .map_err(|error| format!("mount {name:?}: {error}"))
 }
 
 fn resolve_configured_directory(
@@ -118,14 +119,14 @@ fn resolve_configured_directory(
 
 fn expand_config_path(path: &std::path::Path) -> Result<PathBuf, String> {
     let value = path.to_str().ok_or("configured path must be valid UTF-8")?;
-    if value != "~" && !value.starts_with("~/") {
+    let Some(suffix) = crate::config::home_relative_suffix(value) else {
         return Ok(path.into());
-    }
+    };
     let home = crate::config::home_dir().ok_or("cannot expand ~ because home is not set")?;
-    Ok(if value == "~" {
+    Ok(if suffix.is_empty() {
         home
     } else {
-        home.join(&value[2..])
+        home.join(suffix)
     })
 }
 
@@ -200,13 +201,20 @@ fn navigate_down(count: usize, navigation: &NavigationContext) -> Result<PathBuf
         .down_route
         .as_deref()
         .ok_or("no remembered downward route; initialize cj shell integration")?;
-    let remaining = route
-        .strip_prefix(&navigation.cwd)
-        .map_err(|_| "remembered downward route is not below the current directory")?;
-    let components = remaining
-        .components()
+    let route_components = route.components().collect::<Vec<_>>();
+    let cwd_components = navigation.cwd.components().collect::<Vec<_>>();
+    if route_components.len() < cwd_components.len()
+        || !route_components
+            .iter()
+            .zip(&cwd_components)
+            .all(|(left, right)| component_eq(*left, *right))
+    {
+        return Err("remembered downward route is not below the current directory".into());
+    }
+    let components = route_components[cwd_components.len()..]
+        .iter()
         .filter_map(|component| match component {
-            Component::Normal(value) => Some(value),
+            Component::Normal(value) => Some(*value),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -222,6 +230,16 @@ fn navigate_down(count: usize, navigation: &NavigationContext) -> Result<PathBuf
     Ok(navigation
         .cwd
         .join(components[..count].iter().collect::<PathBuf>()))
+}
+
+fn component_eq(left: Component<'_>, right: Component<'_>) -> bool {
+    if cfg!(windows) {
+        left.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn main_worktree() -> Result<PathBuf, String> {
@@ -335,6 +353,7 @@ mod tests {
             MountSpec {
                 path: Some(mount.clone()),
                 provider: None,
+                account: None,
             },
         );
         config.aliases.insert("^".into(), alias.clone());

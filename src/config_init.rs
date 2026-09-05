@@ -12,7 +12,9 @@ pub fn create(
     let path = explicit_path
         .map(PathBuf::from)
         .or_else(config::default_config_path)
-        .ok_or("cannot determine config path; set XDG_CONFIG_HOME or HOME")?;
+        .ok_or(
+            "cannot determine config path; set XDG_CONFIG_HOME, APPDATA, HOME, or USERPROFILE",
+        )?;
     let mut config = Config::default();
     config
         .mounts
@@ -22,6 +24,7 @@ pub fn create(
                 MountSpec {
                     path: Some(path),
                     provider: None,
+                    account: None,
                 },
             )
         }));

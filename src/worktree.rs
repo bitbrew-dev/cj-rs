@@ -276,7 +276,7 @@ fn relative_path(path: &Path, base: &Path) -> PathBuf {
     let common = path_components
         .iter()
         .zip(&base_components)
-        .take_while(|(left, right)| left == right)
+        .take_while(|(left, right)| component_eq(**left, **right))
         .count();
 
     if common == 0
@@ -298,6 +298,16 @@ fn relative_path(path: &Path, base: &Path) -> PathBuf {
         relative.push(".");
     }
     relative
+}
+
+fn component_eq(left: Component<'_>, right: Component<'_>) -> bool {
+    if cfg!(windows) {
+        left.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn optional_reason(value: &str) -> Option<String> {
