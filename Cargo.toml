@@ -8,6 +8,14 @@ license = "MIT"
 repository = "https://github.com/bitbrew-dev/cj-rs"
 keywords = ["cd", "cli", "directory", "git", "shell"]
 categories = ["command-line-utilities"]
+include = [
+  "/src/**",
+  "/tests/support/fake_tool.rs",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/LICENSE",
+  "/README.md",
+]
 
 [[bin]]
 name = "cj"
