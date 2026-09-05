@@ -11,6 +11,10 @@ fzf worktree picker while leaving the final directory change to your shell's rea
 cargo install cj-rs
 ```
 
+Windows x64 release archives are also published as
+`cj-rs-<version>-x86_64-pc-windows-msvc.zip`; put `cj.exe` on `PATH` after
+extracting it.
+
 `cj` supports Bash, Zsh, Nushell, and PowerShell. Generate integration and
 completion files, then load them from the matching shell configuration. `cj`
 only prints source text; it never edits a shell configuration or profile.
@@ -57,7 +61,7 @@ For PowerShell 7:
 ```powershell
 $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
 New-Item -ItemType Directory -Force $CjConfig | Out-Null
-cj init powershell | Set-Content (Join-Path $CjConfig 'init.ps1')
+cj init powershell --setup-key-binding | Set-Content (Join-Path $CjConfig 'init.ps1')
 cj completions powershell | Set-Content (Join-Path $CjConfig 'completions.ps1')
 
 # Add these lines to $PROFILE:
@@ -69,6 +73,8 @@ $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
 Restart the shell or source its configuration after making the change.
 `pwsh` is accepted as an input alias for `powershell`; generated source and
 completion candidates use the canonical `powershell` name.
+On PowerShell, the optional picker binding is installed through PSReadLine when
+that module is available and is otherwise skipped without changing the profile.
 
 ## Jumping
 
@@ -128,13 +134,15 @@ flag to shell initialization:
 eval "$(cj init zsh --setup-key-binding)"
 ```
 
-The default picker key is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and
+The default picker key is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and Windows, and
 <kbd>Alt</kbd>+<kbd>O</kbd> on Linux. The picker requires `fzf`; ordinary jumps and
 worktree listing do not.
 
 ## Configuration
 
-The default config path is `${XDG_CONFIG_HOME:-$HOME/.config}/cj/config.toml`.
+The default config path is `${XDG_CONFIG_HOME:-$HOME/.config}/cj/config.toml` on
+macOS and Linux. Windows uses `%APPDATA%\cj\config.toml` (while still honoring
+`XDG_CONFIG_HOME` when set).
 Every section and field is optional. A complete example is:
 
 ```toml
@@ -148,6 +156,7 @@ fzf = "fzf"
 [key-bindings]
 macos = "ctrl-o"
 linux = "alt-o"
+windows = "ctrl-o"
 
 [keywords]
 top = ["top"]
@@ -165,16 +174,20 @@ downloads = "~/Downloads"
 icloud = { provider = "icloud" }
 google-work = { path = "~/Library/CloudStorage/GoogleDrive-work@example.com" }
 external-ssd = { path = "/Volumes/External SSD" }
+onedrive-work = { provider = "onedrive", account = "business" }
 ```
 
 Program values may be executable names found on `PATH` or explicit executable
 paths. Key bindings accept `ctrl-o`, `alt-o`, or `none`.
 
-Alias and explicit mount paths must be absolute or start with `~/`; cj expands that
-leading home marker itself and does not evaluate shell variables, globs, or command
+Alias and explicit mount paths must be absolute or start with `~/`; Windows also
+accepts `~\`. Drive-letter paths and UNC paths are supported. cj expands only that
+leading home marker and does not evaluate shell variables, globs, or command
 substitutions. Paths containing spaces or single quotes are preserved. A mount must
-specify exactly one `path` or provider; supported providers are `icloud` and
-`google-drive`. Alias and mount names may not collide.
+specify exactly one `path` or provider; supported providers are `icloud`,
+`google-drive`, and `onedrive`. OneDrive alone accepts the optional account selector
+`personal` or `business`; resolution succeeds only when exactly one matching root is
+registered. Alias and mount names may not collide.
 
 Navigation tickers are configurable single characters. Allowed values are `^`,
 `v`, `u`, `d`, `j`, and `k`; the intentionally small allowlist excludes shell
@@ -208,9 +221,9 @@ cj config init
 cj -C ~/.config/cj/work.toml config init
 ```
 
-Initialization never overwrites an existing file. On macOS, `--preamp` scans for
-reachable mounts and adds only unambiguous results as explicit absolute `path`
-entries:
+Initialization never overwrites an existing file. On macOS and Windows, `--preamp`
+scans for reachable mounts and adds only unambiguous results as explicit absolute
+`path` entries:
 
 ```console
 cj config init --preamp
@@ -221,8 +234,14 @@ under `~/Library/CloudStorage/GoogleDrive-*` and `/Volumes/GoogleDrive*`, and mo
 directories under `/Volumes`. It uses the fixed names `icloud` and `google-drive`;
 other volume labels are converted to names such as `External SSD` → `external-ssd`.
 Ambiguous Google accounts and name collisions are reported and not written.
-Automatic discovery and provider-based mounts are macOS-only; explicit mount paths
-continue to work on other platforms.
+
+On Windows, discovery reads the current user's registered cloud sync roots through
+the Windows sync-root API and enumerates non-system drive roots. OneDrive personal
+and business roots are named separately. Multiple matching accounts, duplicate
+volume labels, mapped network drives, and cloud drives with changeable drive letters
+are reported but never persisted automatically. Verbose output shows explicit path
+snippets so the user can choose one. Discovery does not inspect OneDrive settings,
+credentials, account tokens, or Microsoft Graph.
 
 Inspect discoverable mounts without changing the config:
 

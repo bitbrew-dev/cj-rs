@@ -20,7 +20,7 @@ impl TempDir {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("cj-{label}-{}-{id}", std::process::id()));
         fs::create_dir_all(&path).expect("create test directory");
-        let path = fs::canonicalize(path).expect("canonicalize test directory");
+        let path = dunce::canonicalize(path).expect("canonicalize test directory");
         Self { path }
     }
 

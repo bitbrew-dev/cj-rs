@@ -43,6 +43,7 @@ jobs:
             tests:
               - src/**/*.rs
               - tests/**/*.rs
+              - .github/workflows/*.yml
               - Cargo.toml
               - Cargo.lock
               - rust-toolchain.toml
@@ -80,6 +81,33 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CJ_REQUIRE_SHELLS: "1"
+
+  windows-ci:
+    name: windows ci
+    runs-on: windows-latest
+    needs: check-change-files
+    if: ${{ needs.check-change-files.outputs.tests == 'true' }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v5
+      - name: install pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
+          pwsh --version
+      - name: check formatting
+        run: cargo fmt --all -- --check
+      - name: run cargo check
+        run: cargo check --verbose --all-targets --all-features
+      - name: run clippy
+        run: cargo clippy --verbose --all-targets --all-features -- -D warnings
+      - name: build binary
+        run: cargo build --verbose --all-features
+      - name: run tests
+        run: cargo test --verbose --all-targets --all-features
+    env:
+      CARGO_TERM_COLOR: always
+      CJ_REQUIRE_POWERSHELL: "1"
 
   pr-labeler:
     name: pr labeler

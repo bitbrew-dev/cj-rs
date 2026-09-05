@@ -18,7 +18,7 @@ impl Fixture {
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&root).unwrap();
-        let root = fs::canonicalize(root).unwrap();
+        let root = dunce::canonicalize(root).unwrap();
         let home = root.join("home");
         let volumes = root.join("Volumes");
         let cloud = home.join("Library/CloudStorage");
@@ -75,11 +75,11 @@ fn discovers_and_deduplicates_provider_and_volume_paths() {
             .ready_mounts()
             .collect::<BTreeMap<_, _>>()
             .get("archive-disk"),
-        Some(&fs::canonicalize(archive).unwrap())
+        Some(&dunce::canonicalize(archive).unwrap())
     );
     assert_eq!(
         resolve_provider(MountProvider::GoogleDrive, None, &fixture.context()).unwrap(),
-        fs::canonicalize(google).unwrap()
+        dunce::canonicalize(google).unwrap()
     );
     assert_eq!(
         report.ready.len(),

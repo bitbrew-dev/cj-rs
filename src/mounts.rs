@@ -585,7 +585,9 @@ fn matching_children(
 }
 
 fn canonical_directory(path: &Path) -> Option<PathBuf> {
-    path.is_dir().then(|| fs::canonicalize(path).ok()).flatten()
+    path.is_dir()
+        .then(|| dunce::canonicalize(path).ok())
+        .flatten()
 }
 
 pub(crate) fn slug(name: &str) -> Option<String> {
