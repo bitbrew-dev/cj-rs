@@ -3,9 +3,9 @@
 mod support;
 
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,6 +109,28 @@ fn raw_and_no_zoxide_keep_distinct_resolver_semantics() {
         nul_strings(&fs::read(args).expect("read zoxide arguments")).last(),
         Some(&"^^")
     );
+}
+
+#[test]
+fn raw_resolver_preserves_non_utf8_path_bytes() {
+    let temp = TempDir::new("non-utf8-resolver");
+    let target = temp
+        .path()
+        .join(OsString::from_vec(b"invalid-utf8-\xff".to_vec()));
+    #[cfg(not(target_os = "macos"))]
+    fs::create_dir(&target).expect("create non-UTF-8 directory");
+
+    let output = cj(temp.path(), temp.path())
+        .arg("-r")
+        .arg(&target)
+        .output()
+        .expect("resolve non-UTF-8 path");
+    assert_success(&output);
+    assert_eq!(
+        output.stdout,
+        [target.as_os_str().as_bytes(), b"\n"].concat()
+    );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
