@@ -12,7 +12,7 @@ pub fn render(
     match shell {
         Shell::Bash | Shell::Zsh => render_posix(shell, config_path, binding, &config.tickers),
         Shell::Nu => render_nu(config_path, config),
-        Shell::Pwsh => render_powershell(config_path, &config.tickers),
+        Shell::Pwsh => render_powershell(config_path, binding, &config.tickers),
     }
 }
 
@@ -305,7 +305,11 @@ export alias cd = __cj_cd"#
     ))
 }
 
-fn render_powershell(config_path: Option<&Path>, tickers: &Tickers) -> Result<String, String> {
+fn render_powershell(
+    config_path: Option<&Path>,
+    binding: Option<KeyBinding>,
+    tickers: &Tickers,
+) -> Result<String, String> {
     let config = config_path
         .map(absolute)
         .transpose()?
@@ -313,13 +317,13 @@ fn render_powershell(config_path: Option<&Path>, tickers: &Tickers) -> Result<St
         .unwrap_or_else(|| "@()".into());
     let navigate_up = quote_powershell(&tickers.navigate_up);
     let navigate_down = quote_powershell(&tickers.navigate_down);
-    Ok(format!(
+    let wrapper = format!(
         r#"$script:__cj_executable = Get-Command cj -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $script:__cj_config = {config}
 $global:__cj_down_route = $null
 $script:__cj_navigate_up = {navigate_up}
 $script:__cj_navigate_down = {navigate_down}
-$script:__cj_path_comparison = if ($IsWindows) {{ [System.StringComparison]::OrdinalIgnoreCase }} else {{ [System.StringComparison]::Ordinal }}
+$script:__cj_path_comparison = if ($env:OS -eq 'Windows_NT') {{ [System.StringComparison]::OrdinalIgnoreCase }} else {{ [System.StringComparison]::Ordinal }}
 
 function script:Test-CjRepeated {{
     param([string]$Value, [string]$Ticker)
@@ -403,7 +407,32 @@ function global:cd {{
         $global:__cj_down_route = $null
     }}
 }}"#
-    ))
+    );
+    Ok(match binding {
+        Some(KeyBinding::CtrlO) => {
+            format!("{wrapper}\n\n{}", render_powershell_binding("Ctrl+o"))
+        }
+        Some(KeyBinding::AltO) => {
+            format!("{wrapper}\n\n{}", render_powershell_binding("Alt+o"))
+        }
+        Some(KeyBinding::None) | None => wrapper,
+    })
+}
+
+fn render_powershell_binding(chord: &str) -> String {
+    format!(
+        r#"if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {{
+    Set-PSReadLineKeyHandler -Chord '{chord}' -BriefDescription 'cj worktree' -ScriptBlock {{
+        $configArgs = $script:__cj_config
+        $executable = $script:__cj_executable.Path
+        $target = @(& $executable @configArgs --pick-worktree)
+        if (($LASTEXITCODE -eq 0) -and ($target.Count -eq 1) -and -not [string]::IsNullOrEmpty($target[0])) {{
+            Microsoft.PowerShell.Management\Set-Location -LiteralPath $target[0] -ErrorAction Stop
+            $global:__cj_down_route = $null
+        }}
+    }}
+}}"#
+    )
 }
 
 fn absolute(path: &Path) -> Result<std::path::PathBuf, String> {
@@ -483,6 +512,17 @@ mod tests {
         let zsh = render(Shell::Zsh, None, Some(KeyBinding::AltO), &Config::default()).unwrap();
         assert!(zsh.contains("\\builtin bindkey '^[o' _cj_worktree_widget"));
         assert!(zsh.contains("\\builtin zle reset-prompt"));
+
+        let powershell = render(
+            Shell::Pwsh,
+            None,
+            Some(KeyBinding::CtrlO),
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(powershell.contains("Set-PSReadLineKeyHandler -Chord 'Ctrl+o'"));
+        assert!(powershell.contains("Microsoft.PowerShell.Management\\Set-Location"));
+        assert!(!powershell.contains("Invoke-Expression"));
     }
 
     #[test]

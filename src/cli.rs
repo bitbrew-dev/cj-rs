@@ -265,8 +265,10 @@ fn parse_init(
         return Err("usage: cj init <bash|zsh|nu|powershell> [--setup-key-binding]".into());
     }
     let shell = parse_shell(&targets[1])?;
-    if setup_key_binding && matches!(shell, Shell::Nu | Shell::Pwsh) {
-        return Err("--setup-key-binding is currently supported for bash and zsh only".into());
+    if setup_key_binding && shell == Shell::Nu {
+        return Err(
+            "--setup-key-binding is currently supported for bash, zsh, and PowerShell".into(),
+        );
     }
     Ok(Command::Init {
         shell,
@@ -497,6 +499,17 @@ mod tests {
     fn rejects_unsupported_shell_setup_combinations() {
         assert!(Cli::parse(["init", "fish"].map(Into::into)).is_err());
         assert!(Cli::parse(["init", "nu", "--setup-key-binding"].map(Into::into)).is_err());
+        assert_eq!(
+            Cli::parse(["init", "powershell", "--setup-key-binding"].map(Into::into)),
+            Ok(Cli {
+                config_path: None,
+                verbose: false,
+                command: Command::Init {
+                    shell: Shell::Pwsh,
+                    setup_key_binding: true,
+                },
+            })
+        );
         assert!(Cli::parse(["completions", "bash", "-w"].map(Into::into)).is_err());
         assert!(matches!(
             Cli::parse(["--", "completions", "bash"].map(Into::into))

@@ -44,6 +44,7 @@ pub struct Programs {
 pub struct KeyBindings {
     pub macos: KeyBinding,
     pub linux: KeyBinding,
+    pub windows: KeyBinding,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -116,6 +117,7 @@ impl Config {
         match env::consts::OS {
             "macos" => self.key_bindings.macos,
             "linux" => self.key_bindings.linux,
+            "windows" => self.key_bindings.windows,
             _ => KeyBinding::None,
         }
     }
@@ -186,6 +188,7 @@ impl Default for KeyBindings {
         Self {
             macos: KeyBinding::CtrlO,
             linux: KeyBinding::AltO,
+            windows: KeyBinding::CtrlO,
         }
     }
 }
@@ -251,15 +254,39 @@ fn validate_ticker(name: &str, ticker: &str) -> Result<(), String> {
 }
 
 pub fn default_config_path() -> Option<PathBuf> {
-    config_path_from(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME"))
+    config_path_from(
+        env::var_os("XDG_CONFIG_HOME"),
+        env::var_os("APPDATA"),
+        home_dir(),
+        cfg!(windows),
+    )
 }
 
-fn config_path_from(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+pub fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .filter(|path| !path.is_empty())
+        .or_else(|| env::var_os("USERPROFILE").filter(|path| !path.is_empty()))
+        .map(PathBuf::from)
+}
+
+fn config_path_from(
+    xdg: Option<OsString>,
+    appdata: Option<OsString>,
+    home: Option<PathBuf>,
+    windows: bool,
+) -> Option<PathBuf> {
     xdg.filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            home.filter(|path| !path.is_empty())
-                .map(|path| PathBuf::from(path).join(".config"))
+            windows
+                .then_some(appdata)
+                .flatten()
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            home.filter(|path| !path.as_os_str().is_empty())
+                .map(|path| path.join(".config"))
         })
         .map(|path| path.join("cj/config.toml"))
 }
@@ -285,24 +312,39 @@ mod tests {
         assert_eq!(config.programs.zoxide, Path::new("/opt/bin/zoxide"));
         assert_eq!(config.programs.fzf, Path::new("fzf"));
         assert_eq!(config.key_bindings.macos, KeyBinding::CtrlO);
+        assert_eq!(config.key_bindings.windows, KeyBinding::CtrlO);
         assert_eq!(config.tickers, Tickers::default());
     }
 
     #[test]
     fn computes_xdg_and_home_paths() {
         assert_eq!(
-            config_path_from(Some("/xdg".into()), Some("/home/me".into())),
+            config_path_from(
+                Some("/xdg".into()),
+                Some("/appdata".into()),
+                Some("/home/me".into()),
+                false,
+            ),
             Some("/xdg/cj/config.toml".into())
         );
         assert_eq!(
-            config_path_from(None, Some("/home/me".into())),
+            config_path_from(None, None, Some("/home/me".into()), false),
             Some("/home/me/.config/cj/config.toml".into())
         );
         assert_eq!(
-            config_path_from(Some("".into()), Some("/home/me".into())),
+            config_path_from(Some("".into()), None, Some("/home/me".into()), false),
             Some("/home/me/.config/cj/config.toml".into())
         );
-        assert_eq!(config_path_from(None, Some("".into())), None);
+        assert_eq!(config_path_from(None, None, None, false), None);
+        assert_eq!(
+            config_path_from(
+                None,
+                Some("C:\\Users\\me\\AppData\\Roaming".into()),
+                Some("C:\\Users\\me".into()),
+                true,
+            ),
+            Some("C:\\Users\\me\\AppData\\Roaming/cj/config.toml".into())
+        );
     }
 
     #[test]
