@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 mod support;
 
 use std::path::Path;
@@ -71,9 +69,10 @@ fn renders_worktrees_as_table_json_and_relative_paths() {
     let rows: Value = serde_json::from_slice(&relative.stdout).expect("valid relative JSON");
     let rows = rows.as_array().expect("relative worktree JSON array");
     assert!(rows.iter().any(|row| row["path"] == ".."));
+    let linked_relative = Path::new("../..").join("feature's worktree");
     assert!(
         rows.iter()
-            .any(|row| row["path"] == "../../feature's worktree")
+            .any(|row| row["path"] == linked_relative.to_str().unwrap())
     );
 }
 
