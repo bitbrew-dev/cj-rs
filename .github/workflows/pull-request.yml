@@ -56,7 +56,7 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
-      - name: install pinned Rust toolchain
+      - name: install minimum supported Rust toolchain
         run: |
           rustup toolchain install
           rustc --version
@@ -104,7 +104,7 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v5
-      - name: install pinned Rust toolchain
+      - name: install minimum supported Rust toolchain
         run: |
           rustup toolchain install
           rustc --version

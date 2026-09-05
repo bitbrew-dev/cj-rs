@@ -11,6 +11,9 @@ fzf worktree picker while leaving the final directory change to your shell's rea
 cargo install cj-rs
 ```
 
+Building from source requires Rust 1.96.0 or newer. The same minimum version is
+pinned in `rust-toolchain.toml` and exercised by CI.
+
 Windows x64 release archives are also published as
 `cj-rs-<version>-x86_64-pc-windows-msvc.zip`; put `cj.exe` on `PATH` after
 extracting it.
