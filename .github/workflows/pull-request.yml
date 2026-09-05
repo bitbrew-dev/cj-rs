@@ -64,7 +64,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes zsh
-          cargo install nu@0.115.1 --locked
+          nu_version=0.115.1
+          nu_target=x86_64-unknown-linux-gnu
+          nu_archive="nu-${nu_version}-${nu_target}.tar.gz"
+          curl --fail --location --retry 3 \
+            --output "${RUNNER_TEMP}/${nu_archive}" \
+            "https://github.com/nushell/nushell/releases/download/${nu_version}/${nu_archive}"
+          printf '%s  %s\n' \
+            d11d825241f6504a3617c535fa725a9dd6d009c86d7b19fb3168b47635b9d8b0 \
+            "${RUNNER_TEMP}/${nu_archive}" | sha256sum --check --strict
+          tar --extract --gzip \
+            --file "${RUNNER_TEMP}/${nu_archive}" \
+            --directory "${RUNNER_TEMP}"
+          sudo install --mode 0755 \
+            "${RUNNER_TEMP}/nu-${nu_version}-${nu_target}/nu" \
+            /usr/local/bin/nu
           zsh --version
           nu --version
           pwsh --version
