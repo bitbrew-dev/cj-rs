@@ -55,6 +55,17 @@ impl DiscoveryContext {
             "/Volumes".into(),
             home.join("Library/CloudStorage"),
         );
+        #[cfg(windows)]
+        let context = if platform == Platform::Windows {
+            let (windows_mounts, windows_warnings) = crate::windows_mounts::collect();
+            Self {
+                windows_mounts,
+                windows_warnings,
+                ..context
+            }
+        } else {
+            context
+        };
         Ok(context)
     }
 

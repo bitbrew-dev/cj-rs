@@ -12,7 +12,27 @@ categories = ["command-line-utilities"]
 name = "cj"
 path = "src/main.rs"
 
+[[bin]]
+name = "cj-test-tool"
+path = "tests/support/fake_tool.rs"
+required-features = ["test-tools"]
+test = false
+bench = false
+
+[features]
+test-tools = []
+
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 toml = "1.1.5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Foundation_Collections",
+  "Storage",
+  "Storage_Provider",
+  "Win32_Storage_FileSystem",
+  "Win32_System_WinRT",
+  "Win32_System_WindowsProgramming",
+] }

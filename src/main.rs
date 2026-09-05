@@ -5,6 +5,8 @@ mod config_init;
 mod mounts;
 mod resolver;
 mod shell;
+#[cfg(windows)]
+mod windows_mounts;
 mod worktree;
 
 use std::process::ExitCode;
