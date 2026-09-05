@@ -16,9 +16,7 @@ pub fn resolve(
         return literal_target(targets);
     }
     if targets.is_empty() {
-        return std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or("HOME is not set".into());
+        return crate::config::home_dir().ok_or("home directory is not set".into());
     }
 
     if resolver == ResolverOverride::Zoxide {
@@ -123,10 +121,7 @@ fn expand_config_path(path: &std::path::Path) -> Result<PathBuf, String> {
     if value != "~" && !value.starts_with("~/") {
         return Ok(path.into());
     }
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .ok_or("cannot expand ~ because HOME is not set")?;
+    let home = crate::config::home_dir().ok_or("cannot expand ~ because home is not set")?;
     Ok(if value == "~" {
         home
     } else {
