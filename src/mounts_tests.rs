@@ -78,7 +78,7 @@ fn discovers_and_deduplicates_provider_and_volume_paths() {
         Some(&fs::canonicalize(archive).unwrap())
     );
     assert_eq!(
-        resolve_provider(MountProvider::GoogleDrive, &fixture.context()).unwrap(),
+        resolve_provider(MountProvider::GoogleDrive, None, &fixture.context()).unwrap(),
         fs::canonicalize(google).unwrap()
     );
     assert_eq!(
@@ -107,7 +107,7 @@ fn skips_multiple_google_accounts_and_slug_collisions() {
             .all(|item| matches!(item.status, SkipStatus::Ambiguous))
     );
     assert!(
-        resolve_provider(MountProvider::GoogleDrive, &fixture.context())
+        resolve_provider(MountProvider::GoogleDrive, None, &fixture.context())
             .unwrap_err()
             .contains("2 candidates")
     );
@@ -175,5 +175,71 @@ fn other_platform_is_read_only_and_unsupported() {
     let report = scan(&context);
     assert!(report.ready.is_empty());
     assert!(report.warnings[0].contains("only on macOS"));
-    assert!(resolve_provider(MountProvider::Icloud, &context).is_err());
+    assert!(resolve_provider(MountProvider::Icloud, None, &context).is_err());
+}
+
+#[test]
+fn windows_keeps_unique_cloud_roots_and_skips_ambiguous_or_dynamic_mounts() {
+    let fixture = Fixture::new();
+    let personal = fixture.mkdir(fixture.root.join("OneDrive Personal"));
+    let business_a = fixture.mkdir(fixture.root.join("OneDrive Work A"));
+    let business_b = fixture.mkdir(fixture.root.join("OneDrive Work B"));
+    let local = fixture.mkdir(fixture.root.join("Archive"));
+    let dynamic = fixture.mkdir(fixture.root.join("Google Drive"));
+    let context = DiscoveryContext::windows(
+        vec![
+            WindowsMount::ready(
+                "onedrive-personal".into(),
+                Source::OneDrivePersonal,
+                personal.clone(),
+            ),
+            WindowsMount::ready(
+                "onedrive-business".into(),
+                Source::OneDriveBusiness,
+                business_a.clone(),
+            ),
+            WindowsMount::ready(
+                "onedrive-business".into(),
+                Source::OneDriveBusiness,
+                business_b.clone(),
+            ),
+            WindowsMount::ready("archive".into(), Source::WindowsDrive, local.clone()),
+            WindowsMount::dynamic("google-drive".into(), dynamic.clone()),
+            WindowsMount::ready("cloud-box".into(), Source::Cloud, fixture.root.clone()),
+            WindowsMount::ready("onedrive".into(), Source::OneDrive, personal.clone()),
+        ],
+        vec!["cloud API partially unavailable".into()],
+    );
+
+    let report = scan(&context);
+    let ready = report.ready_mounts().collect::<BTreeMap<_, _>>();
+    assert_eq!(ready.get("onedrive-personal"), Some(&personal));
+    assert_eq!(ready.get("archive"), Some(&local));
+    assert!(report.skipped.iter().any(|mount| {
+        mount.name == "onedrive-business" && matches!(mount.status, SkipStatus::Ambiguous)
+    }));
+    assert!(
+        report.skipped.iter().any(|mount| {
+            mount.name == "google-drive" && mount.reason == "dynamic-drive-letter"
+        })
+    );
+    assert_eq!(report.warnings, ["cloud API partially unavailable"]);
+
+    assert_eq!(
+        resolve_provider(
+            MountProvider::OneDrive,
+            Some(OneDriveAccount::Personal),
+            &context,
+        ),
+        Ok(personal)
+    );
+    assert!(
+        resolve_provider(
+            MountProvider::OneDrive,
+            Some(OneDriveAccount::Business),
+            &context,
+        )
+        .unwrap_err()
+        .contains("2 candidates")
+    );
 }

@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::config::{MountProvider, MountSpec};
+use crate::config::{MountProvider, MountSpec, OneDriveAccount};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Platform {
     Macos,
+    Windows,
     Other,
 }
 
@@ -19,6 +20,8 @@ pub struct DiscoveryContext {
     home: PathBuf,
     volumes_root: PathBuf,
     cloud_storage_root: PathBuf,
+    windows_mounts: Vec<WindowsMount>,
+    windows_warnings: Vec<String>,
 }
 
 impl DiscoveryContext {
@@ -37,19 +40,22 @@ impl DiscoveryContext {
         }
         let platform = if cfg!(target_os = "macos") {
             Platform::Macos
+        } else if cfg!(windows) {
+            Platform::Windows
         } else {
             Platform::Other
         };
-        let home = env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = crate::config::home_dir().unwrap_or_default();
         if platform == Platform::Macos && home.as_os_str().is_empty() {
             return Err("HOME is not set".into());
         }
-        Ok(Self::new(
+        let context = Self::new(
             platform,
             home.clone(),
             "/Volumes".into(),
             home.join("Library/CloudStorage"),
-        ))
+        );
+        Ok(context)
     }
 
     pub fn new(
@@ -63,6 +69,49 @@ impl DiscoveryContext {
             home,
             volumes_root,
             cloud_storage_root,
+            windows_mounts: Vec::new(),
+            windows_warnings: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn windows(mounts: Vec<WindowsMount>, warnings: Vec<String>) -> Self {
+        Self {
+            platform: Platform::Windows,
+            home: PathBuf::new(),
+            volumes_root: PathBuf::new(),
+            cloud_storage_root: PathBuf::new(),
+            windows_mounts: mounts,
+            windows_warnings: warnings,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct WindowsMount {
+    name: String,
+    source: Source,
+    path: PathBuf,
+    dynamic: bool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl WindowsMount {
+    pub(crate) fn ready(name: String, source: Source, path: PathBuf) -> Self {
+        Self {
+            name,
+            source,
+            path,
+            dynamic: false,
+        }
+    }
+
+    pub(crate) fn dynamic(name: String, path: PathBuf) -> Self {
+        Self {
+            name,
+            source: Source::WindowsDrive,
+            path,
+            dynamic: true,
         }
     }
 }
@@ -98,12 +147,18 @@ pub struct SkippedMount {
     pub candidates: Vec<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Source {
     Volume,
     Icloud,
     GoogleDrive,
+    Cloud,
+    OneDrive,
+    OneDrivePersonal,
+    OneDriveBusiness,
+    WindowsDrive,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -121,11 +176,18 @@ pub struct RenderedScan {
 
 pub fn scan(context: &DiscoveryContext) -> ScanReport {
     let mut report = ScanReport::default();
-    if context.platform != Platform::Macos {
-        report
-            .warnings
-            .push("automatic mount discovery is supported only on macOS".into());
-        return report;
+    match context.platform {
+        Platform::Windows => {
+            scan_windows(context, &mut report);
+            return report;
+        }
+        Platform::Other => {
+            report
+                .warnings
+                .push("automatic mount discovery is supported only on macOS and Windows".into());
+            return report;
+        }
+        Platform::Macos => {}
     }
 
     let icloud = canonical_directory(
@@ -234,10 +296,31 @@ fn skipped(
 
 pub fn resolve_provider(
     provider: MountProvider,
+    account: Option<OneDriveAccount>,
     context: &DiscoveryContext,
 ) -> Result<PathBuf, String> {
+    if provider == MountProvider::OneDrive {
+        if context.platform != Platform::Windows {
+            return Err("onedrive provider is supported only on Windows".into());
+        }
+        let candidates = context
+            .windows_mounts
+            .iter()
+            .filter(|mount| !mount.dynamic)
+            .filter(|mount| match account {
+                None => matches!(
+                    mount.source,
+                    Source::OneDrive | Source::OneDrivePersonal | Source::OneDriveBusiness
+                ),
+                Some(OneDriveAccount::Personal) => mount.source == Source::OneDrivePersonal,
+                Some(OneDriveAccount::Business) => mount.source == Source::OneDriveBusiness,
+            })
+            .map(|mount| mount.path.clone())
+            .collect::<Vec<_>>();
+        return one_candidate("onedrive", candidates);
+    }
     if context.platform != Platform::Macos {
-        return Err("automatic mount providers are supported only on macOS".into());
+        return Err("icloud and google-drive providers are supported only on macOS".into());
     }
     let (name, candidates) = match provider {
         MountProvider::Icloud => (
@@ -254,7 +337,13 @@ pub fn resolve_provider(
             let mut warnings = Vec::new();
             ("google-drive", google_candidates(context, &mut warnings))
         }
+        MountProvider::OneDrive => unreachable!("handled above"),
     };
+    one_candidate(name, candidates.into_iter().collect())
+}
+
+fn one_candidate(name: &str, candidates: Vec<PathBuf>) -> Result<PathBuf, String> {
+    let candidates = deduplicate_windows_paths(candidates);
     match candidates.len() {
         1 => Ok(candidates.into_iter().next().expect("one provider path")),
         0 => Err(format!("{name} provider is not mounted")),
@@ -409,6 +498,61 @@ fn google_candidates(context: &DiscoveryContext, warnings: &mut Vec<String>) -> 
     paths
 }
 
+fn scan_windows(context: &DiscoveryContext, report: &mut ScanReport) {
+    report
+        .warnings
+        .extend(context.windows_warnings.iter().cloned());
+    let mut grouped: BTreeMap<String, Vec<&WindowsMount>> = BTreeMap::new();
+    for mount in &context.windows_mounts {
+        grouped.entry(mount.name.clone()).or_default().push(mount);
+    }
+    for (name, mounts) in grouped {
+        let source = mounts[0].source;
+        let paths =
+            deduplicate_windows_paths(mounts.iter().map(|mount| mount.path.clone()).collect());
+        if mounts.iter().any(|mount| mount.dynamic) {
+            report.skipped.push(skipped(
+                name,
+                source,
+                SkipStatus::Skipped,
+                "dynamic-drive-letter",
+                paths,
+            ));
+        } else if paths.len() == 1 {
+            report.ready.push(ready(
+                name,
+                source,
+                paths.into_iter().next().expect("one Windows path"),
+            ));
+        } else {
+            let reason = if matches!(source, Source::OneDrive | Source::OneDriveBusiness) {
+                "multiple-provider-paths"
+            } else {
+                "mount-name-collision"
+            };
+            report
+                .skipped
+                .push(skipped(name, source, SkipStatus::Ambiguous, reason, paths));
+        }
+    }
+    report
+        .ready
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    report
+        .skipped
+        .sort_by(|left, right| left.name.cmp(&right.name));
+}
+
+fn deduplicate_windows_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = BTreeMap::new();
+    for path in paths {
+        unique
+            .entry(path.to_string_lossy().to_ascii_lowercase())
+            .or_insert(path);
+    }
+    unique.into_values().collect()
+}
+
 fn matching_children(
     root: &Path,
     matches: impl Fn(&str) -> bool,
@@ -433,7 +577,7 @@ fn canonical_directory(path: &Path) -> Option<PathBuf> {
     path.is_dir().then(|| fs::canonicalize(path).ok()).flatten()
 }
 
-fn slug(name: &str) -> Option<String> {
+pub(crate) fn slug(name: &str) -> Option<String> {
     let value = name
         .chars()
         .fold((String::new(), false), |(mut output, dash), character| {
@@ -458,6 +602,11 @@ fn source_name(source: Source) -> &'static str {
         Source::Volume => "volume",
         Source::Icloud => "icloud",
         Source::GoogleDrive => "google-drive",
+        Source::Cloud => "cloud",
+        Source::OneDrive => "onedrive",
+        Source::OneDrivePersonal => "onedrive-personal",
+        Source::OneDriveBusiness => "onedrive-business",
+        Source::WindowsDrive => "windows-drive",
     }
 }
 
@@ -471,6 +620,7 @@ fn mount_toml(name: &str, path: &Path) -> String {
         MountSpec {
             path: Some(path.into()),
             provider: None,
+            account: None,
         },
     )]);
     toml::to_string(&Snippet { mounts }).expect("mount snippet serialization")
