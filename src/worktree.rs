@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 use crate::cli::OutputFormat;
+use crate::path_bytes;
 
 #[derive(Debug, PartialEq)]
 pub struct Worktree {
@@ -42,8 +43,8 @@ pub fn render(
     let rows = worktrees
         .iter()
         .enumerate()
-        .map(|(index, worktree)| worktree.row(index == 0, relative, cwd))
-        .collect::<Vec<_>>();
+        .map(|(index, worktree)| worktree.row(index == 0, relative, cwd, format))
+        .collect::<Result<Vec<_>, _>>()?;
 
     match format {
         OutputFormat::Table => Ok(render_table(&rows)),
@@ -55,7 +56,7 @@ pub fn render(
 pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, String> {
     let mut input = Vec::new();
     for (index, worktree) in worktrees.iter().enumerate() {
-        let row = worktree.row(index == 0, false, Path::new(""));
+        let row = worktree.display_row(index == 0);
         write!(
             input,
             "{index}\t{}\t{}\t{}\0",
@@ -104,7 +105,11 @@ pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, Strin
     if !output.status.success() {
         return Err(format!("fzf exited with {}", output.status));
     }
-    let selection = output.stdout.split(|byte| *byte == 0).next().unwrap_or(&[]);
+    selected_path(worktrees, &output.stdout).map(Some)
+}
+
+fn selected_path(worktrees: &[Worktree], output: &[u8]) -> Result<PathBuf, String> {
+    let selection = output.split(|byte| *byte == 0).next().unwrap_or(&[]);
     let index = selection
         .split(|byte| *byte == b'\t')
         .next()
@@ -113,7 +118,7 @@ pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, Strin
         .ok_or("fzf returned an invalid worktree selection")?;
     worktrees
         .get(index)
-        .map(|worktree| Some(worktree.path.clone()))
+        .map(|worktree| worktree.path.clone())
         .ok_or("fzf returned an unknown worktree selection".into())
 }
 
@@ -128,9 +133,13 @@ fn parse(output: &[u8]) -> Result<Vec<Worktree>, String> {
             }
             continue;
         }
-        let field = std::str::from_utf8(raw_field)
-            .map_err(|_| "git returned a non-UTF-8 worktree record")?;
-        let (key, value) = field.split_once(' ').unwrap_or((field, ""));
+        let (key, value) = raw_field
+            .iter()
+            .position(|byte| *byte == b' ')
+            .map_or((raw_field, &[][..]), |index| {
+                (&raw_field[..index], &raw_field[index + 1..])
+            });
+        let key = std::str::from_utf8(key).map_err(|_| "git returned a non-UTF-8 field name")?;
 
         if key == "worktree" {
             if let Some(worktree) = current.replace(Worktree::new(value)?) {
@@ -142,6 +151,8 @@ fn parse(output: &[u8]) -> Result<Vec<Worktree>, String> {
         let worktree = current
             .as_mut()
             .ok_or_else(|| format!("git returned {key} before a worktree path"))?;
+        let value = std::str::from_utf8(value)
+            .map_err(|_| format!("git returned a non-UTF-8 {key} value"))?;
         match key {
             "HEAD" => worktree.head = Some(value.into()),
             "branch" => worktree.branch = Some(strip_branch_prefix(value).into()),
@@ -162,12 +173,12 @@ fn parse(output: &[u8]) -> Result<Vec<Worktree>, String> {
 }
 
 impl Worktree {
-    fn new(path: &str) -> Result<Self, String> {
+    fn new(path: &[u8]) -> Result<Self, String> {
         if path.is_empty() {
             return Err("git returned an empty worktree path".into());
         }
         Ok(Self {
-            path: path.into(),
+            path: path_bytes::from_bytes(path, "git returned a non-UTF-8 worktree path")?,
             head: None,
             branch: None,
             bare: false,
@@ -177,14 +188,37 @@ impl Worktree {
         })
     }
 
-    fn row(&self, main: bool, relative: bool, cwd: &Path) -> WorktreeRow {
+    fn row(
+        &self,
+        main: bool,
+        relative: bool,
+        cwd: &Path,
+        format: OutputFormat,
+    ) -> Result<WorktreeRow, String> {
         let path = if relative {
             relative_path(&self.path, cwd)
         } else {
             self.path.clone()
         };
+        let path = path.into_os_string().into_string().map_err(|_| {
+            format!(
+                "cannot render a non-UTF-8 worktree path as {}",
+                match format {
+                    OutputFormat::Table => "a table",
+                    OutputFormat::Json => "JSON",
+                }
+            )
+        })?;
+        Ok(self.row_with_path(main, path))
+    }
+
+    fn display_row(&self, main: bool) -> WorktreeRow {
+        self.row_with_path(main, self.path.to_string_lossy().into_owned())
+    }
+
+    fn row_with_path(&self, main: bool, path: String) -> WorktreeRow {
         WorktreeRow {
-            path: path.to_string_lossy().into_owned(),
+            path,
             branch: self.branch.clone(),
             head: self.head.clone(),
             main,
@@ -380,5 +414,36 @@ mod tests {
         let worktrees = parse(PORCELAIN).unwrap();
         let error = pick(&worktrees, Path::new("/definitely/missing/fzf")).unwrap_err();
         assert!(error.contains("fzf executable not found"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_non_utf8_paths_and_rejects_text_rendering() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut porcelain = b"worktree /repo/invalid-".to_vec();
+        porcelain.push(0xff);
+        porcelain.extend_from_slice(b"\0HEAD 0123456789abcdef\0branch refs/heads/main\0\0");
+
+        let worktrees = parse(&porcelain).unwrap();
+        assert_eq!(
+            worktrees[0].path.as_os_str().as_bytes(),
+            b"/repo/invalid-\xff"
+        );
+        assert_eq!(
+            selected_path(&worktrees, b"0\tselected\0")
+                .unwrap()
+                .as_os_str()
+                .as_bytes(),
+            b"/repo/invalid-\xff"
+        );
+        assert_eq!(
+            render(&worktrees, OutputFormat::Table, false, Path::new("/repo")).unwrap_err(),
+            "cannot render a non-UTF-8 worktree path as a table"
+        );
+        assert_eq!(
+            render(&worktrees, OutputFormat::Json, false, Path::new("/repo")).unwrap_err(),
+            "cannot render a non-UTF-8 worktree path as JSON"
+        );
     }
 }

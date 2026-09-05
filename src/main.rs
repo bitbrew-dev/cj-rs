@@ -3,27 +3,37 @@ mod completions;
 mod config;
 mod config_init;
 mod mounts;
+mod path_bytes;
 mod resolver;
 mod shell;
 #[cfg(windows)]
 mod windows_mounts;
 mod worktree;
 
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use cli::{Cli, Command};
 
 struct Execution {
-    stdout: String,
+    stdout: Vec<u8>,
     stderr: String,
 }
 
 impl Execution {
     fn stdout(stdout: String) -> Self {
         Self {
-            stdout,
+            stdout: stdout.into_bytes(),
             stderr: String::new(),
         }
+    }
+
+    fn path(path: PathBuf) -> Result<Self, String> {
+        Ok(Self {
+            stdout: path_bytes::output_bytes(&path)?.into_owned(),
+            stderr: String::new(),
+        })
     }
 }
 
@@ -38,9 +48,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
         Command::Resolve { targets, resolver } => {
             let config = config::Config::load(config_path.as_deref())?;
             let navigation = resolver::NavigationContext::from_process()?;
-            resolver::resolve(&targets, resolver, &config, &navigation)
-                .map(|path| path.to_string_lossy().into_owned())
-                .map(Execution::stdout)
+            resolver::resolve(&targets, resolver, &config, &navigation).and_then(Execution::path)
         }
         Command::Init {
             shell,
@@ -71,11 +79,9 @@ fn execute(cli: Cli) -> Result<Execution, String> {
         }
         Command::Worktrees { pick: true, .. } => {
             let config = config::Config::load(config_path.as_deref())?;
-            Ok(Execution::stdout(
-                worktree::pick(&worktree::list()?, &config.programs.fzf)?
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            ))
+            worktree::pick(&worktree::list()?, &config.programs.fzf)?
+                .map(Execution::path)
+                .unwrap_or_else(|| Ok(Execution::stdout(String::new())))
         }
         Command::MountsScan { format } => {
             let context = mounts::DiscoveryContext::from_process()?;
@@ -85,7 +91,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 cli::OutputFormat::Json => mounts::render_json(&report, verbose)?,
             };
             Ok(Execution {
-                stdout: rendered.stdout,
+                stdout: rendered.stdout.into_bytes(),
                 stderr: rendered.stderr,
             })
         }
@@ -104,7 +110,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 .map(|report| mounts::render_table(report, verbose).stderr)
                 .unwrap_or_default();
             Ok(Execution {
-                stdout: format!("created {}", path.display()),
+                stdout: format!("created {}", path.display()).into_bytes(),
                 stderr,
             })
         }
@@ -117,8 +123,17 @@ fn main() -> ExitCode {
             if !output.stderr.is_empty() {
                 eprintln!("{}", output.stderr);
             }
-            println!("{}", output.stdout);
-            ExitCode::SUCCESS
+            let mut stdout = std::io::stdout().lock();
+            match stdout
+                .write_all(&output.stdout)
+                .and_then(|()| stdout.write_all(b"\n"))
+            {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("cj: cannot write stdout: {error}");
+                    ExitCode::from(2)
+                }
+            }
         }
         Err(error) => {
             eprintln!("cj: {error}");

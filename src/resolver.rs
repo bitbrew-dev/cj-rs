@@ -5,6 +5,7 @@ use std::process::{Command, Output};
 use crate::cli::ResolverOverride;
 use crate::config::{Config, DefaultResolver, MountSpec};
 use crate::mounts::{self, DiscoveryContext};
+use crate::path_bytes;
 
 pub fn resolve(
     targets: &[OsString],
@@ -155,19 +156,13 @@ fn parse_zoxide_output(output: Output) -> Result<PathBuf, ZoxideFailure> {
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| ZoxideFailure::Query("zoxide returned a non-UTF-8 path".into()))?;
-    let mut lines = stdout.lines();
-    let path = lines
-        .next()
-        .filter(|line| !line.is_empty())
-        .ok_or_else(|| ZoxideFailure::Query("zoxide did not return a destination".into()))?;
-    if lines.next().is_some() {
+    let path = path_bytes::without_line_ending(&output.stdout);
+    if path.is_empty() {
         return Err(ZoxideFailure::Query(
-            "zoxide returned more than one destination".into(),
+            "zoxide did not return a destination".into(),
         ));
     }
-    Ok(path.into())
+    path_bytes::from_bytes(path, "zoxide returned a non-UTF-8 path").map_err(ZoxideFailure::Query)
 }
 
 fn zoxide_error(error: ZoxideFailure) -> String {
@@ -250,13 +245,13 @@ fn main_worktree() -> Result<PathBuf, String> {
     if !output.status.success() {
         return Err("current directory is not in a Git repository".into());
     }
-    output
+    let path = output
         .stdout
         .split(|byte| *byte == 0)
         .next()
         .and_then(|field| field.strip_prefix(b"worktree "))
-        .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
-        .ok_or("git did not return a main worktree".into())
+        .ok_or_else(|| "git did not return a main worktree".to_owned())?;
+    path_bytes::from_bytes(path, "git returned a non-UTF-8 main worktree path")
 }
 
 fn git_output<const N: usize>(args: [&str; N]) -> Result<PathBuf, String> {
@@ -267,10 +262,11 @@ fn git_output<const N: usize>(args: [&str; N]) -> Result<PathBuf, String> {
     if !output.status.success() {
         return Err("current directory is not in a Git repository".into());
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!path.is_empty())
-        .then(|| PathBuf::from(path))
-        .ok_or("git did not return a directory".into())
+    let path = path_bytes::without_line_ending(&output.stdout);
+    if path.is_empty() {
+        return Err("git did not return a directory".into());
+    }
+    path_bytes::from_bytes(path, "git returned a non-UTF-8 directory")
 }
 
 #[cfg(test)]
