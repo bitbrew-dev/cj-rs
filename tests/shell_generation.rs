@@ -13,7 +13,11 @@ fn generated_sources_parse_in_available_shells() {
     let config = temp.path().join("it's config.toml");
     fs::write(
         &config,
-        "[aliases]\n\"work space\" = \"/tmp\"\n\"it's;$()\" = \"/tmp\"\n",
+        format!(
+            "[aliases]\n\"work space\" = \"{}\"\n\"it's;$()\" = \"{}\"\n",
+            toml_string(temp.path()),
+            toml_string(temp.path())
+        ),
     )
     .expect("write completion config");
 
@@ -31,7 +35,10 @@ fn generation_is_deterministic_and_keeps_source_on_stdout() {
     let config = temp.path().join("config.toml");
     fs::write(
         &config,
-        "[keywords]\ntop = [\"repo\", \"repo\"]\nmain-worktree = [\"home base\"]\n\n[aliases]\ncode = \"/tmp\"\n",
+        format!(
+            "[keywords]\ntop = [\"repo\", \"repo\"]\nmain-worktree = [\"home base\"]\n\n[aliases]\ncode = \"{}\"\n",
+            toml_string(temp.path())
+        ),
     )
     .expect("write completion config");
 
@@ -142,7 +149,11 @@ fn powershell_integration_and_completion_work_when_available() {
     let completions_path = temp.path().join("cj-completions.ps1");
     fs::write(
         &integration_path,
-        generate(temp.path(), &config, "init", "powershell"),
+        generate_with_args(
+            temp.path(),
+            &config,
+            ["init", "powershell", "--setup-key-binding"],
+        ),
     )
     .expect("write PowerShell integration");
     fs::write(
@@ -160,6 +171,9 @@ cd 'v'
 $text = 'cj config init --p'
 $matches = [System.Management.Automation.CommandCompletion]::CompleteInput($text, $text.Length, $null).CompletionMatches.CompletionText
 if ('--preamp' -notin $matches) { throw 'missing --preamp completion' }
+if (Get-Command Get-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
+    if ($null -eq (Get-PSReadLineKeyHandler -Chord 'Ctrl+o')) { throw 'missing cj PSReadLine binding' }
+}
 [Console]::Out.Write((Microsoft.PowerShell.Management\Get-Location).ProviderPath)
 "#;
     let output = Command::new("pwsh")
@@ -232,10 +246,14 @@ fn bash_completion_handles_nested_commands_and_spaced_names() {
 }
 
 fn generate(root: &Path, config: &Path, command: &str, shell: &str) -> String {
+    generate_with_args(root, config, [command, shell])
+}
+
+fn generate_with_args<const N: usize>(root: &Path, config: &Path, args: [&str; N]) -> String {
     let output = cj(root, root)
         .arg("-C")
         .arg(config)
-        .args([command, shell])
+        .args(args)
         .output()
         .expect("generate shell source");
     assert_success(&output);
@@ -303,7 +321,9 @@ fn available(program: &str) -> bool {
         .output()
         .is_ok_and(|output| output.status.success());
     assert!(
-        available || env::var_os("CJ_REQUIRE_SHELLS").is_none(),
+        available
+            || (env::var_os("CJ_REQUIRE_SHELLS").is_none()
+                && !(program == "pwsh" && env::var_os("CJ_REQUIRE_POWERSHELL").is_some())),
         "required shell interpreter is unavailable: {program}"
     );
     available

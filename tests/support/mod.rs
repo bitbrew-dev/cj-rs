@@ -83,9 +83,13 @@ impl GitFixture {
 
 pub fn cj(cwd: &Path, isolated_root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cj"));
+    let home = isolated_root.join("home");
     command
         .current_dir(cwd)
-        .env("HOME", isolated_root.join("home"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("APPDATA", isolated_root.join("appdata"))
+        .env("LOCALAPPDATA", isolated_root.join("local-appdata"))
         .env("XDG_CONFIG_HOME", isolated_root.join("config"))
         .env("GIT_CEILING_DIRECTORIES", isolated_root)
         .env_remove("GIT_DIR")
@@ -142,10 +146,13 @@ fn git<const N: usize>(cwd: &Path, args: [&str; N]) {
 
 fn git_command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
+    let hooks = cwd.join(".cj-test-hooks");
+    fs::create_dir_all(&hooks).expect("create isolated hooks directory");
     command
         .current_dir(cwd)
-        .args(["-c", "core.hooksPath=/dev/null"])
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .arg("-c")
+        .arg(format!("core.hooksPath={}", hooks.display()))
+        .env("GIT_CONFIG_GLOBAL", null_device())
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -154,4 +161,8 @@ fn git_command(cwd: &Path) -> Command {
         .env_remove("GIT_OBJECT_DIRECTORY")
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
     command
+}
+
+fn null_device() -> &'static str {
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
