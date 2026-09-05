@@ -356,7 +356,14 @@ mod tests {
         )
         .unwrap();
         assert!(json.contains("\"path\": \"..\""));
-        assert!(json.contains("\"path\": \"../feature\""));
+        let rows: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let feature = Path::new("..").join("feature");
+        assert!(
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["path"] == feature.to_string_lossy().as_ref())
+        );
         assert!(json.contains("\"main\": true"));
     }
 

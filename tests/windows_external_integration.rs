@@ -53,7 +53,11 @@ fn native_fake_fzf_uses_nul_records_and_returns_worktree() {
         .output()
         .expect("run cj picker");
     assert_success(&output);
-    assert_eq!(output.stdout, path_output(&git.linked));
+    let selected = String::from_utf8(output.stdout).expect("selected path is UTF-8");
+    assert_eq!(
+        selected.trim_end().replace('\\', "/"),
+        git.linked.to_string_lossy().replace('\\', "/")
+    );
     let input = fs::read(stdin).expect("read fzf stdin");
     assert_eq!(input.iter().filter(|byte| **byte == 0).count(), 2);
     assert!(nul_strings(&fs::read(args).unwrap()).contains(&"--read0"));

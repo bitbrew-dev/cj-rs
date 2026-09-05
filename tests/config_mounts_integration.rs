@@ -28,12 +28,15 @@ impl Fixture {
         let home = discovery.join("home");
         let cwd = temp.path().join("working directory");
         let alias = home.join("Code Projects' Archive");
-        let mount = discovery.join("manual mounts/External SSD's Files");
+        let mount = discovery.join("manual mounts").join("External SSD's Files");
         let missing_alias = home.join("Missing Alias");
-        let missing_mount = discovery.join("manual mounts/Missing Drive");
-        let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
-        let volume = discovery.join("Volumes/External SSD's Disk");
-        let cloud_storage = home.join("Library/CloudStorage");
+        let missing_mount = discovery.join("manual mounts").join("Missing Drive");
+        let icloud = home
+            .join("Library")
+            .join("Mobile Documents")
+            .join("com~apple~CloudDocs");
+        let volume = discovery.join("Volumes").join("External SSD's Disk");
+        let cloud_storage = home.join("Library").join("CloudStorage");
         let google = [
             cloud_storage.join("GoogleDrive-one@example.com"),
             cloud_storage.join("GoogleDrive-two@example.com"),
@@ -136,7 +139,7 @@ fn resolves_aliases_and_explicit_mounts_with_resolver_controls() {
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).expect("error is UTF-8");
         assert!(stderr.contains(&format!("{kind} \"{target}\" is not reachable")));
-        assert!(stderr.contains(missing.to_str().unwrap()));
+        assert!(stderr.contains(&format!("{missing:?}")));
     }
 }
 

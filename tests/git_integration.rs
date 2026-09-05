@@ -14,7 +14,7 @@ fn resolves_top_and_main_worktree_exactly() {
         .output()
         .expect("run cj top");
     assert_success(&top);
-    assert_eq!(top.stdout, destination(&fixture.main));
+    assert_path_output(&top.stdout, &fixture.main);
     assert!(top.stderr.is_empty());
 
     let origin = cj(&fixture.linked_nested, fixture.temp.path())
@@ -22,7 +22,7 @@ fn resolves_top_and_main_worktree_exactly() {
         .output()
         .expect("run cj origin");
     assert_success(&origin);
-    assert_eq!(origin.stdout, destination(&fixture.main));
+    assert_path_output(&origin.stdout, &fixture.main);
     assert!(origin.stderr.is_empty());
 }
 
@@ -42,8 +42,8 @@ fn renders_worktrees_as_table_json_and_relative_paths() {
             .next()
             .is_some_and(|line| line.starts_with("PATH"))
     );
-    assert!(table.contains(fixture.main.to_str().unwrap()));
-    assert!(table.contains(fixture.linked.to_str().unwrap()));
+    assert_rendered_path(&table, &fixture.main);
+    assert_rendered_path(&table, &fixture.linked);
     assert!(table.contains("feature/quoted-path"));
 
     let json = cj(&fixture.main_nested, fixture.temp.path())
@@ -69,11 +69,12 @@ fn renders_worktrees_as_table_json_and_relative_paths() {
     let rows: Value = serde_json::from_slice(&relative.stdout).expect("valid relative JSON");
     let rows = rows.as_array().expect("relative worktree JSON array");
     assert!(rows.iter().any(|row| row["path"] == ".."));
-    let linked_relative = Path::new("../..").join("feature's worktree");
-    assert!(
-        rows.iter()
-            .any(|row| row["path"] == linked_relative.to_str().unwrap())
-    );
+    let linked_relative = Path::new("..").join("..").join("feature's worktree");
+    assert!(rows.iter().any(|row| {
+        row["path"]
+            .as_str()
+            .is_some_and(|path| path_eq(path, &linked_relative))
+    }));
 }
 
 #[test]
@@ -91,12 +92,40 @@ fn reports_git_failures_on_stderr() {
     assert!(stderr.contains("not a git repository"));
 }
 
-fn destination(path: &Path) -> Vec<u8> {
-    format!("{}\n", path.display()).into_bytes()
+fn assert_path_output(output: &[u8], expected: &Path) {
+    let actual = std::str::from_utf8(output)
+        .expect("path output is UTF-8")
+        .strip_suffix('\n')
+        .expect("path output ends with a newline");
+    assert!(path_eq(actual, expected), "path: {actual:?}");
+}
+
+fn assert_rendered_path(output: &str, expected: &Path) {
+    let native = expected.to_string_lossy();
+    let git_style = native.replace('\\', "/");
+    assert!(
+        output.contains(native.as_ref()) || output.contains(&git_style),
+        "missing path {expected:?}"
+    );
+}
+
+fn path_eq(actual: &str, expected: &Path) -> bool {
+    let expected = expected.to_string_lossy();
+    if cfg!(windows) {
+        actual
+            .replace('\\', "/")
+            .eq_ignore_ascii_case(&expected.replace('\\', "/"))
+    } else {
+        actual == expected
+    }
 }
 
 fn row_for_path<'a>(rows: &'a [Value], path: &Path) -> &'a Value {
     rows.iter()
-        .find(|row| row["path"] == path.to_str().unwrap())
+        .find(|row| {
+            row["path"]
+                .as_str()
+                .is_some_and(|value| path_eq(value, path))
+        })
         .expect("worktree row")
 }
