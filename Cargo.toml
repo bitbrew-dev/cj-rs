@@ -2,6 +2,7 @@
 name = "cj-rs"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96"
 description = "A small shell companion for jumping between useful directories"
 license = "MIT"
 repository = "https://github.com/bitbrew-dev/cj-rs"
