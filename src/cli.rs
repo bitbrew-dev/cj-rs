@@ -7,6 +7,7 @@ cj - jump between useful directories
 Usage:
   cj [OPTIONS] [TARGET]...
   cj [OPTIONS] --worktree [--format table|json] [--relative]
+  cj [OPTIONS] --jump-worktree
   cj [OPTIONS] config init [--preamp]
   cj [OPTIONS] mounts scan [--format table|json]
   cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]
@@ -21,7 +22,7 @@ Options:
   -w, --worktree           List this repository's worktrees
   -f, --format <FORMAT>    Output format: table or json [default: table]
   -R, --relative           Render worktree paths relative to the current directory
-      --pick-worktree      Select a worktree with fzf
+  -jw, --jump-worktree     Select a worktree with fzf and print its path
       --setup-key-binding  Include the OS-specific fzf binding in shell setup
   -o, --output <PATH>      Write generated shell source and create parent directories
       --preamp             Add unambiguous mounts to a new config
@@ -46,7 +47,7 @@ pub enum Command {
     Worktrees {
         format: OutputFormat,
         relative: bool,
-        pick: bool,
+        jump: bool,
     },
     Init {
         shell: Shell,
@@ -101,7 +102,7 @@ impl Cli {
         let mut worktree = false;
         let mut format = None;
         let mut relative = false;
-        let mut pick = false;
+        let mut jump = false;
         let mut setup_key_binding = false;
         let mut output = None;
         let mut preamp = false;
@@ -144,9 +145,9 @@ impl Cli {
                 format = Some(parse_format(&value)?);
             } else if options && matches!(text, Some("-R" | "--relative")) {
                 relative = true;
-            } else if options && text == Some("--pick-worktree") {
+            } else if options && matches!(text, Some("-jw" | "--jump-worktree")) {
                 worktree = true;
-                pick = true;
+                jump = true;
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
             } else if options && matches!(text, Some("-o" | "--output")) {
@@ -173,7 +174,7 @@ impl Cli {
                 worktree,
                 format,
                 relative,
-                pick,
+                jump,
             )?
         } else if !force_resolve
             && resolver == ResolverOverride::Configured
@@ -186,7 +187,7 @@ impl Cli {
                 worktree,
                 format,
                 relative,
-                pick,
+                jump,
             )?
         } else if !force_resolve
             && resolver == ResolverOverride::Configured
@@ -201,7 +202,7 @@ impl Cli {
                 worktree,
                 format,
                 relative,
-                pick,
+                jump,
                 preamp,
             )?
         } else if !force_resolve
@@ -217,7 +218,7 @@ impl Cli {
                 worktree,
                 format,
                 relative,
-                pick,
+                jump,
                 preamp,
             )?
         } else if worktree {
@@ -227,16 +228,16 @@ impl Cli {
             if resolver != ResolverOverride::Configured || setup_key_binding || preamp {
                 return Err("resolver and setup flags cannot be used with --worktree".into());
             }
-            if pick && (format.is_some() || relative) {
-                return Err("--format and --relative cannot be used with --pick-worktree".into());
+            if jump && (format.is_some() || relative) {
+                return Err("--format and --relative cannot be used with --jump-worktree".into());
             }
             Command::Worktrees {
                 format: format.unwrap_or(OutputFormat::Table),
                 relative,
-                pick,
+                jump,
             }
         } else {
-            if format.is_some() || relative || pick || setup_key_binding || preamp {
+            if format.is_some() || relative || jump || setup_key_binding || preamp {
                 return Err(
                     "--format, --relative, and setup flags require their matching mode".into(),
                 );
@@ -280,10 +281,10 @@ fn parse_init(
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
-    pick: bool,
+    jump: bool,
     preamp: bool,
 ) -> Result<Command, String> {
-    if worktree || format.is_some() || relative || pick || preamp {
+    if worktree || format.is_some() || relative || jump || preamp {
         return Err("worktree and resolver flags cannot be used with init".into());
     }
     if targets.len() != 2 {
@@ -310,10 +311,10 @@ fn parse_completions(
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
-    pick: bool,
+    jump: bool,
     preamp: bool,
 ) -> Result<Command, String> {
-    if options.setup_key_binding || worktree || format.is_some() || relative || pick || preamp {
+    if options.setup_key_binding || worktree || format.is_some() || relative || jump || preamp {
         return Err(
             "worktree, format, relative, preamp, and setup flags cannot be used with completions"
                 .into(),
@@ -345,12 +346,12 @@ fn parse_config_init(
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
-    pick: bool,
+    jump: bool,
 ) -> Result<Command, String> {
     if targets.len() != 2 || targets[1].to_str() != Some("init") {
         return Err("usage: cj config init [--preamp]".into());
     }
-    if setup_key_binding || worktree || format.is_some() || relative || pick {
+    if setup_key_binding || worktree || format.is_some() || relative || jump {
         return Err(
             "worktree, output, and shell setup flags cannot be used with config init".into(),
         );
@@ -365,12 +366,12 @@ fn parse_mounts_scan(
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
-    pick: bool,
+    jump: bool,
 ) -> Result<Command, String> {
     if targets.len() != 2 || targets[1].to_str() != Some("scan") {
         return Err("usage: cj mounts scan [--format table|json]".into());
     }
-    if preamp || setup_key_binding || worktree || relative || pick {
+    if preamp || setup_key_binding || worktree || relative || jump {
         return Err(
             "worktree, relative, preamp, and shell setup flags cannot be used with mounts scan"
                 .into(),
@@ -410,7 +411,7 @@ mod tests {
                 command: Command::Worktrees {
                     format: OutputFormat::Json,
                     relative: true,
-                    pick: false,
+                    jump: false,
                 },
             })
         );
@@ -470,9 +471,31 @@ mod tests {
     }
 
     #[test]
-    fn picker_rejects_ignored_output_flags() {
-        assert!(Cli::parse(["--pick-worktree", "-R"].map(Into::into)).is_err());
-        assert!(Cli::parse(["--pick-worktree", "-f", "json"].map(Into::into)).is_err());
+    fn parses_exact_jump_worktree_options() {
+        for option in ["-jw", "--jump-worktree"] {
+            assert_eq!(
+                Cli::parse([option].map(Into::into)),
+                Ok(Cli {
+                    config_path: None,
+                    verbose: false,
+                    command: Command::Worktrees {
+                        format: OutputFormat::Table,
+                        relative: false,
+                        jump: true,
+                    },
+                })
+            );
+        }
+
+        assert!(Cli::parse(["-j"].map(Into::into)).is_err());
+        assert!(Cli::parse(["-jwx"].map(Into::into)).is_err());
+        assert!(Cli::parse(["--pick-worktree"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn jump_worktree_rejects_ignored_output_flags() {
+        assert!(Cli::parse(["--jump-worktree", "-R"].map(Into::into)).is_err());
+        assert!(Cli::parse(["-jw", "-f", "json"].map(Into::into)).is_err());
     }
 
     #[test]

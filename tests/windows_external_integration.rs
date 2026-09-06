@@ -44,7 +44,7 @@ fn native_fake_fzf_uses_nul_records_and_returns_worktree() {
     let output = cj(&git.main, git.temp.path())
         .arg("-C")
         .arg(&config)
-        .arg("--pick-worktree")
+        .arg("--jump-worktree")
         .env("CJ_FAKE_TOOL", "fzf")
         .env("CJ_FAKE_MODE", "success")
         .env("CJ_FAKE_SELECTION", "1")
@@ -98,6 +98,46 @@ fn powershell_wrapper_changes_its_calling_session_with_zoxide() {
         output.stdout,
         fixture.destination.as_os_str().as_encoded_bytes()
     );
+}
+
+#[test]
+fn powershell_wrapper_jumps_to_the_selected_worktree() {
+    let git = GitFixture::new("windows-powershell-fzf");
+    let tool = copy_tool(git.temp.path(), "fzf.exe");
+    let config = git.temp.path().join("fzf config.toml");
+    let source = git.temp.path().join("cj.ps1");
+    let args = git.temp.path().join("fzf args");
+    let stdin = git.temp.path().join("fzf stdin");
+    write_config(&config, Path::new("missing-zoxide.exe"), &tool);
+    let init = cj(&git.main_nested, git.temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["init", "powershell"])
+        .output()
+        .expect("generate PowerShell integration");
+    assert_success(&init);
+    fs::write(&source, init.stdout).expect("write PowerShell integration");
+
+    let output = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            ". $env:CJ_SOURCE; cd -jw; [Console]::Out.Write((Get-Location).ProviderPath)",
+        ])
+        .current_dir(&git.main_nested)
+        .env("CJ_SOURCE", source)
+        .env("CJ_FAKE_TOOL", "fzf")
+        .env("CJ_FAKE_MODE", "success")
+        .env("CJ_FAKE_SELECTION", "1")
+        .env("CJ_FAKE_ARGS", args)
+        .env("CJ_FAKE_STDIN", stdin)
+        .env("PATH", path_with_cj())
+        .output()
+        .expect("run PowerShell integration");
+    assert_success(&output);
+    assert_eq!(output.stdout, git.linked.as_os_str().as_encoded_bytes());
 }
 
 struct ToolFixture {

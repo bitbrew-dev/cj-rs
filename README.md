@@ -2,7 +2,7 @@
 
 `cj` is a small shell companion for jumping between useful directories. It adds
 named aliases and mounts, Git-aware shortcuts, optional zoxide resolution, and an
-fzf worktree picker while leaving the final directory change to your shell's real
+fzf worktree jump while leaving the final directory change to your shell's real
 `cd` builtin.
 
 ## Install
@@ -133,6 +133,7 @@ through to a later resolver.
 List the current repository's worktrees in a table:
 
 ```console
+cj -w
 cj --worktree
 ```
 
@@ -143,7 +144,19 @@ cj -w --format json
 cj -w --relative
 ```
 
-To install an fzf worktree picker together with the `cd` wrapper, add the setup
+Jump to a worktree interactively with fzf:
+
+```console
+cj -jw                 # print the selected worktree path
+cj --jump-worktree     # long form of the same command
+cd -jw                 # select a worktree and change directory
+```
+
+`-w/--worktree` only lists worktrees; `-jw/--jump-worktree` selects exactly one.
+The `cd` form requires the generated shell integration so the parent shell can
+perform the directory change.
+
+To install an fzf worktree jump key together with the `cd` wrapper, add the setup
 flag to shell initialization:
 
 ```bash
@@ -151,7 +164,8 @@ eval "$(cj init zsh --setup-key-binding)"
 ```
 
 The default picker key is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and Windows, and
-<kbd>Alt</kbd>+<kbd>O</kbd> on Linux. The picker requires `fzf`; ordinary jumps and
+<kbd>Alt</kbd>+<kbd>O</kbd> on Linux. Pressing it invokes the same interactive
+worktree jump as `cd -jw`. The jump requires `fzf`; ordinary directory jumps and
 worktree listing do not.
 
 ## Configuration

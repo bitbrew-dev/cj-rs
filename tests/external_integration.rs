@@ -225,6 +225,74 @@ fn fzf_cancellation_and_failure_are_controlled() {
 }
 
 #[test]
+fn generated_wrappers_jump_to_the_selected_worktree() {
+    let fixture = PickerFixture::new("fzf-shell-jump");
+    let binary_dir = fixture.git.temp.path().join("binary dir");
+    fs::create_dir_all(&binary_dir).expect("create binary directory");
+    symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
+    let mut paths = vec![binary_dir];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let path = env::join_paths(paths).expect("join PATH");
+    let mut exercised = 0;
+
+    for shell in ["bash", "zsh"] {
+        let init = cj(&fixture.git.main_nested, fixture.git.temp.path())
+            .arg("-C")
+            .arg(&fixture.config)
+            .args(["init", shell])
+            .output()
+            .expect("render shell setup");
+        assert_success(&init);
+
+        for flag in ["-jw", "--jump-worktree"] {
+            let mut command = shell_with_setup(
+                shell,
+                &init.stdout,
+                "eval \"$1\"; cd \"$2\"; printf '%s\\n' \"$PWD\"",
+            );
+            command
+                .arg(flag)
+                .current_dir(&fixture.git.main_nested)
+                .env("PATH", &path)
+                .env("CJ_FAKE_ARGS", &fixture.args)
+                .env("CJ_FAKE_STDIN", &fixture.stdin)
+                .env("CJ_FAKE_MODE", "success")
+                .env("CJ_FAKE_SELECTION", "1");
+            let output = match command.output() {
+                Ok(output) => output,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("cannot run {shell}: {error}"),
+            };
+            exercised += 1;
+            assert_success(&output);
+            assert_eq!(output.stdout, path_output(&fixture.git.linked));
+            assert!(output.stderr.is_empty());
+        }
+
+        let mut command = shell_with_setup(
+            shell,
+            &init.stdout,
+            "eval \"$1\"; cd -jw || :; printf '%s\\n' \"$PWD\"",
+        );
+        command
+            .current_dir(&fixture.git.main_nested)
+            .env("PATH", &path)
+            .env("CJ_FAKE_ARGS", &fixture.args)
+            .env("CJ_FAKE_STDIN", &fixture.stdin)
+            .env("CJ_FAKE_MODE", "cancel");
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot run {shell}: {error}"),
+        };
+        assert_success(&output);
+        assert_eq!(output.stdout, path_output(&fixture.git.main_nested));
+        assert!(output.stderr.is_empty());
+    }
+    assert!(exercised > 0, "neither bash nor zsh is available");
+}
+
+#[test]
 fn generated_wrappers_jump_and_propagate_failures() {
     let fixture = ToolFixture::new("shell-wrapper");
     let binary_dir = fixture.temp.path().join("binary dir");
@@ -450,7 +518,7 @@ impl PickerFixture {
         command
             .arg("-C")
             .arg(&self.config)
-            .arg("--pick-worktree")
+            .arg("-jw")
             .env("CJ_FAKE_ARGS", &self.args)
             .env("CJ_FAKE_STDIN", &self.stdin)
             .env("CJ_FAKE_MODE", mode)
@@ -474,7 +542,10 @@ fn shell_with_setup(shell: &str, setup: &[u8], script: &str) -> Command {
     }
     command
         .args(["-c", script, "_"])
-        .arg(OsStr::from_bytes(setup));
+        .arg(OsStr::from_bytes(setup))
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR");
     command
 }
 
