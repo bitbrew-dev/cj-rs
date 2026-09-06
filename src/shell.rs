@@ -383,7 +383,7 @@ function global:cd {{
 
     $navArg = if ($cjArgs.Count -eq 1) {{ $first }} elseif (($cjArgs.Count -eq 2) -and (($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ [string]$cjArgs[1] }} else {{ '' }}
     $before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
-    $invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
+    [string[]]$invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
     $hadRoute = Test-Path Env:CJ_INTERNAL_DOWN_ROUTE
     $oldRoute = $env:CJ_INTERNAL_DOWN_ROUTE
     $configArgs = $script:__cj_config
@@ -543,6 +543,7 @@ mod tests {
         let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
         assert!(powershell.contains("($first -ceq '-jw')"));
         assert!(powershell.contains("($first -ceq '--jump-worktree')"));
+        assert!(powershell.contains("[string[]]$invokeArgs"));
         assert!(!powershell.contains("pick-worktree"));
     }
 
