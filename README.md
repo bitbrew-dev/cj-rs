@@ -20,13 +20,13 @@ extracting it.
 
 `cj` supports Bash, Zsh, Nushell, and PowerShell. Generate integration and
 completion files, then load them from the matching shell configuration. `cj`
-only prints source text; it never edits a shell configuration or profile.
+prints source text by default; `init -o/--output` writes it to a file and creates
+missing parent directories. It never edits a shell configuration or profile.
 
 For Bash:
 
 ```bash
-mkdir -p ~/.config/cj
-cj init bash > ~/.config/cj/init.bash
+cj init bash -o ~/.config/cj/init.bash
 cj completions bash > ~/.config/cj/completions.bash
 
 # Add to ~/.bashrc:
@@ -37,8 +37,7 @@ source ~/.config/cj/completions.bash
 For Zsh:
 
 ```zsh
-mkdir -p ~/.config/cj
-cj init zsh > ~/.config/cj/init.zsh
+cj init zsh -o ~/.config/cj/init.zsh
 cj completions zsh > ~/.config/cj/completions.zsh
 
 # Add to ~/.zshrc:
@@ -50,8 +49,7 @@ source ~/.config/cj/completions.zsh
 For Nushell:
 
 ```nu
-mkdir ~/.config/nushell
-cj init nu | save --force ~/.config/nushell/cj.nu
+cj init nu -o ~/.config/nushell/cj.nu
 cj completions nu | save --force ~/.config/nushell/cj-completions.nu
 
 # Add to config.nu:
@@ -63,8 +61,7 @@ For PowerShell 7:
 
 ```powershell
 $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
-New-Item -ItemType Directory -Force $CjConfig | Out-Null
-cj init powershell --setup-key-binding | Set-Content (Join-Path $CjConfig 'init.ps1')
+cj init powershell --setup-key-binding -o (Join-Path $CjConfig 'init.ps1')
 cj completions powershell | Set-Content (Join-Path $CjConfig 'completions.ps1')
 
 # Add these lines to $PROFILE:
@@ -208,7 +205,7 @@ the selected config path is embedded safely in the generated wrapper:
 
 ```bash
 cj -C "$HOME/.config/cj/work.toml" init zsh --setup-key-binding \
-  > "$HOME/.config/cj/init.zsh"
+  -o "$HOME/.config/cj/init.zsh"
 ```
 
 There is no configurable `cd` executable: `cd` is a shell builtin. `cj` only prints

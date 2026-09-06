@@ -9,7 +9,7 @@ Usage:
   cj [OPTIONS] --worktree [--format table|json] [--relative]
   cj [OPTIONS] config init [--preamp]
   cj [OPTIONS] mounts scan [--format table|json]
-  cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding]
+  cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]
   cj [OPTIONS] completions <bash|zsh|nu|powershell>
 
 Options:
@@ -23,6 +23,7 @@ Options:
   -R, --relative           Render worktree paths relative to the current directory
       --pick-worktree      Select a worktree with fzf
       --setup-key-binding  Include the OS-specific fzf binding in shell setup
+  -o, --output <PATH>      Write shell setup to a file and create parent directories
       --preamp             Add unambiguous mounts to a new config
   -h, --help               Print help
   -V, --version            Print version";
@@ -50,6 +51,7 @@ pub enum Command {
     Init {
         shell: Shell,
         setup_key_binding: bool,
+        output: Option<PathBuf>,
     },
     Completions {
         shell: Shell,
@@ -84,6 +86,11 @@ pub enum Shell {
     Pwsh,
 }
 
+struct InitOptions {
+    setup_key_binding: bool,
+    output: Option<PathBuf>,
+}
+
 impl Cli {
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
         let mut args = args.into_iter().peekable();
@@ -95,6 +102,7 @@ impl Cli {
         let mut relative = false;
         let mut pick = false;
         let mut setup_key_binding = false;
+        let mut output = None;
         let mut preamp = false;
         let mut targets = Vec::new();
         let mut options = true;
@@ -140,6 +148,10 @@ impl Cli {
                 pick = true;
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
+            } else if options && matches!(text, Some("-o" | "--output")) {
+                output = Some(PathBuf::from(
+                    args.next().ok_or("--output requires a path")?,
+                ));
             } else if options && text == Some("--preamp") {
                 preamp = true;
             } else if options && text.is_some_and(|value| value.starts_with('-')) {
@@ -181,7 +193,10 @@ impl Cli {
         {
             parse_init(
                 &targets,
-                setup_key_binding,
+                InitOptions {
+                    setup_key_binding,
+                    output: output.clone(),
+                },
                 worktree,
                 format,
                 relative,
@@ -225,6 +240,10 @@ impl Cli {
             Command::Resolve { targets, resolver }
         };
 
+        if output.is_some() && !matches!(command, Command::Init { .. }) {
+            return Err("--output can only be used with init".into());
+        }
+
         Ok(Self {
             config_path,
             verbose,
@@ -251,7 +270,7 @@ fn parse_format(value: &OsString) -> Result<OutputFormat, String> {
 
 fn parse_init(
     targets: &[OsString],
-    setup_key_binding: bool,
+    options: InitOptions,
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
@@ -262,17 +281,20 @@ fn parse_init(
         return Err("worktree and resolver flags cannot be used with init".into());
     }
     if targets.len() != 2 {
-        return Err("usage: cj init <bash|zsh|nu|powershell> [--setup-key-binding]".into());
+        return Err(
+            "usage: cj init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]".into(),
+        );
     }
     let shell = parse_shell(&targets[1])?;
-    if setup_key_binding && shell == Shell::Nu {
+    if options.setup_key_binding && shell == Shell::Nu {
         return Err(
             "--setup-key-binding is currently supported for bash, zsh, and PowerShell".into(),
         );
     }
     Ok(Command::Init {
         shell,
-        setup_key_binding,
+        setup_key_binding: options.setup_key_binding,
+        output: options.output,
     })
 }
 
@@ -484,6 +506,7 @@ mod tests {
                 Command::Init {
                     shell,
                     setup_key_binding: false,
+                    output: None,
                 }
             );
             assert_eq!(
@@ -507,6 +530,7 @@ mod tests {
                 command: Command::Init {
                     shell: Shell::Pwsh,
                     setup_key_binding: true,
+                    output: None,
                 },
             })
         );
@@ -517,5 +541,29 @@ mod tests {
                 .command,
             Command::Resolve { .. }
         ));
+    }
+
+    #[test]
+    fn output_is_scoped_to_init() {
+        for flag in ["-o", "--output"] {
+            assert_eq!(
+                Cli::parse(["init", "zsh", flag, "nested/init.zsh"].map(Into::into))
+                    .unwrap()
+                    .command,
+                Command::Init {
+                    shell: Shell::Zsh,
+                    setup_key_binding: false,
+                    output: Some("nested/init.zsh".into()),
+                }
+            );
+        }
+        assert_eq!(
+            Cli::parse(["init", "zsh", "--output"].map(Into::into)),
+            Err("--output requires a path".into())
+        );
+        assert_eq!(
+            Cli::parse(["completions", "zsh", "-o", "out"].map(Into::into)),
+            Err("--output can only be used with init".into())
+        );
     }
 }

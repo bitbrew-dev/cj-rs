@@ -96,7 +96,7 @@ fn bash(destinations: &[String]) -> String {
     if [[ -n "$literal_mode" ]]; then
         candidates=("${{destinations[@]}}")
     else case "$previous" in
-        -C|--config)
+        -C|--config|-o|--output)
             compopt -o filenames 2>/dev/null || :
             while IFS= read -r candidate; do COMPREPLY+=("$candidate"); done < <(compgen -f -- "$current")
             return
@@ -113,7 +113,7 @@ fn bash(destinations: &[String]) -> String {
             while (( i < COMP_CWORD )); do
                 token="${{COMP_WORDS[i]}}"
                 case "$token" in
-                    -C|--config|-f|--format) ((i += 2)); continue ;;
+                    -C|--config|-f|--format|-o|--output) ((i += 2)); continue ;;
                     --) forced_resolve=1; command=; subcommand=; break ;;
                     -r|--raw|-z|--zoxide|-Z|--no-zoxide) forced_resolve=1; command=; subcommand=; ((i++)); continue ;;
                     -w|--worktree) worktree_mode=1; ((i++)); continue ;;
@@ -145,7 +145,7 @@ fn bash(destinations: &[String]) -> String {
                 config:init) candidates=(--preamp "${{common_flags[@]}}") ;;
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
-                init:) if [[ -n "$command_value" ]]; then candidates=(--setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" --setup-key-binding "${{common_flags[@]}}"); fi ;;
+                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
                 completions:) if [[ -n "$command_value" ]]; then candidates=("${{common_flags[@]}}"); else candidates=("${{shells[@]}}" "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
@@ -188,7 +188,7 @@ _cj_complete() {{
     if [[ -n "$literal_mode" ]]; then
         candidates=("${{destinations[@]}}")
     else case "$previous" in
-        -C|--config) _files; return ;;
+        -C|--config|-o|--output) _files; return ;;
         -f|--format) candidates=("${{formats[@]}}") ;;
         *)
             command=
@@ -201,7 +201,7 @@ _cj_complete() {{
             while (( i < CURRENT )); do
                 token="${{words[i]}}"
                 case "$token" in
-                    -C|--config|-f|--format) ((i += 2)); continue ;;
+                    -C|--config|-f|--format|-o|--output) ((i += 2)); continue ;;
                     --) forced_resolve=1; command=; subcommand=; break ;;
                     -r|--raw|-z|--zoxide|-Z|--no-zoxide) forced_resolve=1; command=; subcommand=; ((i++)); continue ;;
                     -w|--worktree) worktree_mode=1; ((i++)); continue ;;
@@ -233,7 +233,7 @@ _cj_complete() {{
                 config:init) candidates=(--preamp "${{common_flags[@]}}") ;;
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
-                init:) if [[ -n "$command_value" ]]; then candidates=(--setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" --setup-key-binding "${{common_flags[@]}}"); fi ;;
+                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
                 completions:) if [[ -n "$command_value" ]]; then candidates=("${{common_flags[@]}}"); else candidates=("${{shells[@]}}" "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
@@ -285,6 +285,7 @@ export extern cj [
 export extern "cj init" [
     shell: string@"nu-complete cj shells"
     --setup-key-binding
+    --output(-o): path
     --config(-C): path
     --verbose(-v)
     --help(-h)
@@ -353,7 +354,7 @@ fn powershell(destinations: &[String]) -> String {
 
     if ($literalMode) {{
         $candidates = $destinations
-    }} elseif (@('-C', '--config') -ccontains $previous) {{
+    }} elseif (@('-C', '--config', '-o', '--output') -ccontains $previous) {{
         return
     }} elseif (@('-f', '--format') -ccontains $previous) {{
         $candidates = $formats
@@ -370,7 +371,7 @@ fn powershell(destinations: &[String]) -> String {
         for ($index = 1; $index -lt $scanLimit; $index++) {{
             $token = $elements[$index]
             if ($skipValue) {{ $skipValue = $false; continue }}
-            if (($token -ceq '-C') -or ($token -ceq '--config') -or ($token -ceq '-f') -or ($token -ceq '--format')) {{ $skipValue = $true; continue }}
+            if (($token -ceq '-C') -or ($token -ceq '--config') -or ($token -ceq '-f') -or ($token -ceq '--format') -or ($token -ceq '-o') -or ($token -ceq '--output')) {{ $skipValue = $true; continue }}
             if ($token -ceq '--') {{ $forcedResolve = $true; $command = ''; $subcommand = ''; break }}
             if (($token -ceq '-r') -or ($token -ceq '--raw') -or ($token -ceq '-z') -or ($token -ceq '--zoxide') -or ($token -ceq '-Z') -or ($token -ceq '--no-zoxide')) {{ $forcedResolve = $true; $command = ''; $subcommand = ''; continue }}
             if (($token -ceq '-w') -or ($token -ceq '--worktree')) {{ $worktreeMode = $true; continue }}
@@ -390,7 +391,7 @@ fn powershell(destinations: &[String]) -> String {
             'config:init' {{ @('--preamp') + $commonFlags }}
             'mounts:' {{ @('scan') + $commonFlags }}
             'mounts:scan' {{ @('-f', '--format') + $commonFlags }}
-            'init:' {{ if ($commandValue) {{ @('--setup-key-binding') + $commonFlags }} else {{ $shells + @('--setup-key-binding') + $commonFlags }} }}
+            'init:' {{ if ($commandValue) {{ @('-o', '--output', '--setup-key-binding') + $commonFlags }} else {{ $shells + @('-o', '--output', '--setup-key-binding') + $commonFlags }} }}
             'completions:' {{ if ($commandValue) {{ $commonFlags }} else {{ $shells + $commonFlags }} }}
             default {{ $commands + $destinations + $flags }}
         }} }}
@@ -488,6 +489,15 @@ mod tests {
         let powershell = render(Shell::Pwsh, &config);
         assert!(powershell.contains("'work space'"));
         assert!(powershell.contains("'it''s-here'"));
+    }
+
+    #[test]
+    fn generated_completions_offer_init_output() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Nu, Shell::Pwsh] {
+            let output = render(shell, &configured());
+            assert!(output.contains("-o"));
+            assert!(output.contains("--output"));
+        }
     }
 
     #[test]

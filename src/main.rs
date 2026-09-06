@@ -19,6 +19,7 @@ use cli::{Cli, Command};
 struct Execution {
     stdout: Vec<u8>,
     stderr: String,
+    write_stdout: bool,
 }
 
 impl Execution {
@@ -26,6 +27,15 @@ impl Execution {
         Self {
             stdout: stdout.into_bytes(),
             stderr: String::new(),
+            write_stdout: true,
+        }
+    }
+
+    fn silent() -> Self {
+        Self {
+            stdout: Vec::new(),
+            stderr: String::new(),
+            write_stdout: false,
         }
     }
 
@@ -33,8 +43,23 @@ impl Execution {
         Ok(Self {
             stdout: path_bytes::output_bytes(&path)?.into_owned(),
             stderr: String::new(),
+            write_stdout: true,
         })
     }
+}
+
+fn write_generated(path: &std::path::Path, source: String) -> Result<Execution, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "cannot create output directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    std::fs::write(path, format!("{source}\n"))
+        .map_err(|error| format!("cannot write output {}: {error}", path.display()))?;
+    Ok(Execution::silent())
 }
 
 fn execute(cli: Cli) -> Result<Execution, String> {
@@ -53,15 +78,19 @@ fn execute(cli: Cli) -> Result<Execution, String> {
         Command::Init {
             shell,
             setup_key_binding,
+            output,
         } => {
             let config = config::Config::load(config_path.as_deref())?;
-            shell::render(
+            let source = shell::render(
                 shell,
                 config_path.as_deref(),
                 setup_key_binding.then(|| config.key_binding()),
                 &config,
-            )
-            .map(Execution::stdout)
+            )?;
+            match output {
+                Some(path) => write_generated(&path, source),
+                None => Ok(Execution::stdout(source)),
+            }
         }
         Command::Completions { shell } => {
             let config = config::Config::load(config_path.as_deref())?;
@@ -93,6 +122,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
             Ok(Execution {
                 stdout: rendered.stdout.into_bytes(),
                 stderr: rendered.stderr,
+                write_stdout: true,
             })
         }
         Command::ConfigInit { preamp } => {
@@ -112,6 +142,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
             Ok(Execution {
                 stdout: format!("created {}", path.display()).into_bytes(),
                 stderr,
+                write_stdout: true,
             })
         }
     }
@@ -123,11 +154,15 @@ fn main() -> ExitCode {
             if !output.stderr.is_empty() {
                 eprintln!("{}", output.stderr);
             }
-            let mut stdout = std::io::stdout().lock();
-            match stdout
-                .write_all(&output.stdout)
-                .and_then(|()| stdout.write_all(b"\n"))
-            {
+            let result = if output.write_stdout {
+                let mut stdout = std::io::stdout().lock();
+                stdout
+                    .write_all(&output.stdout)
+                    .and_then(|()| stdout.write_all(b"\n"))
+            } else {
+                Ok(())
+            };
+            match result {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("cj: cannot write stdout: {error}");
