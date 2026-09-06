@@ -359,10 +359,7 @@ fn generated_wrappers_navigate_down_with_custom_tickers() {
         let no_history = no_history.output().expect("run available shell");
         assert_eq!(no_history.status.code(), Some(2));
         assert!(no_history.stdout.is_empty());
-        assert_eq!(
-            no_history.stderr,
-            b"cj: no remembered downward route; initialize cj shell integration\n"
-        );
+        assert_eq!(no_history.stderr, b"cj: no remembered downward route\n");
 
         let clear_script = "eval \"$1\"; cd uu; cd other; builtin cd ..; cd d";
         let mut cleared = shell_with_setup(shell, &init.stdout, clear_script);
@@ -370,10 +367,7 @@ fn generated_wrappers_navigate_down_with_custom_tickers() {
         let cleared = cleared.output().expect("run available shell");
         assert_eq!(cleared.status.code(), Some(2));
         assert!(cleared.stdout.is_empty());
-        assert_eq!(
-            cleared.stderr,
-            b"cj: no remembered downward route; initialize cj shell integration\n"
-        );
+        assert_eq!(cleared.stderr, b"cj: no remembered downward route\n");
 
         let shadow_script = "eval \"$1\"; cd uu; cd d; printf '%s\\n' \"$PWD\"";
         let mut shadowed = shell_with_setup(shell, &init.stdout, shadow_script);

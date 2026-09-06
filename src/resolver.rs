@@ -195,7 +195,7 @@ fn navigate_down(count: usize, navigation: &NavigationContext) -> Result<PathBuf
     let route = navigation
         .down_route
         .as_deref()
-        .ok_or("no remembered downward route; initialize cj shell integration")?;
+        .ok_or("no remembered downward route")?;
     let route_components = route.components().collect::<Vec<_>>();
     let cwd_components = navigation.cwd.components().collect::<Vec<_>>();
     if route_components.len() < cwd_components.len()
