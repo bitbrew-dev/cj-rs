@@ -73,6 +73,9 @@ function cd() {{
         -z|--zoxide)
             _cj_nav_arg=
             ;;
+        -jw|--jump-worktree)
+            _cj_nav_arg=
+            ;;
         -Z|--no-zoxide)
             if [[ $# -eq 2 ]]; then
                 if \{builtin} cd -- "$2" 2>/dev/null; then
@@ -104,7 +107,7 @@ function cd() {{
         _cj_nav_mode=down
     fi
     case "${{1-}}" in
-        -z|--zoxide|-Z|--no-zoxide) _cj_args=("$@") ;;
+        -z|--zoxide|-Z|--no-zoxide|-jw|--jump-worktree) _cj_args=("$@") ;;
         *) _cj_args=(-- "$@") ;;
     esac
     _cj_before="$(\builtin pwd -P)" || return
@@ -143,7 +146,7 @@ function cd() {{
 }
 
 fn render_binding(shell: Shell, config: &str, control: bool) -> String {
-    let command = format!("\\command cj{config} --pick-worktree");
+    let command = format!("\\command cj{config} --jump-worktree");
     match shell {
         Shell::Bash => {
             let key = if control { r#"\C-o"# } else { r#"\eo"# };
@@ -262,7 +265,7 @@ export def --env --wrapped __cj_cd [...args: string] {{
             $env.CJ_INTERNAL_DOWN_ROUTE = ''
             return
         }}
-    }} else if ($args.0 | str starts-with '-') and (not ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide'])) {{
+    }} else if ($args.0 | str starts-with '-') and (not ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide' '-jw' '--jump-worktree'])) {{
         if ($args | length) != 1 {{ error make {{ msg: 'cj: Nushell cd accepts one target' }} }}
         cd $args.0
         $env.CJ_INTERNAL_DOWN_ROUTE = ''
@@ -271,7 +274,7 @@ export def --env --wrapped __cj_cd [...args: string] {{
 
     let nav_arg = if (($args | length) == 1) {{ $args.0 }} else if (($args | length) == 2) and (($args.0 == '-Z') or ($args.0 == '--no-zoxide')) {{ $args.1 }} else {{ '' }}
     let before = ($env.PWD | path expand)
-    let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide']) {{ $args }} else {{ ['--'] | append $args }}
+    let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide' '-jw' '--jump-worktree']) {{ $args }} else {{ ['--'] | append $args }}
     let result = with-env {{ CJ_INTERNAL_DOWN_ROUTE: $env.CJ_INTERNAL_DOWN_ROUTE }} {{
         ^cj ...$config ...$invoke_args | complete
     }}
@@ -376,11 +379,11 @@ function global:cd {{
         $global:__cj_down_route = $null
         return
     }}
-    if ($first.StartsWith('-') -and -not (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ throw "cj: unsupported PowerShell cd option: $first" }}
+    if ($first.StartsWith('-') -and -not (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree'))) {{ throw "cj: unsupported PowerShell cd option: $first" }}
 
     $navArg = if ($cjArgs.Count -eq 1) {{ $first }} elseif (($cjArgs.Count -eq 2) -and (($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ [string]$cjArgs[1] }} else {{ '' }}
     $before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
-    $invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
+    $invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
     $hadRoute = Test-Path Env:CJ_INTERNAL_DOWN_ROUTE
     $oldRoute = $env:CJ_INTERNAL_DOWN_ROUTE
     $configArgs = $script:__cj_config
@@ -425,7 +428,7 @@ fn render_powershell_binding(chord: &str) -> String {
     Set-PSReadLineKeyHandler -Chord '{chord}' -BriefDescription 'cj worktree' -ScriptBlock {{
         $configArgs = $script:__cj_config
         $executable = $script:__cj_executable.Path
-        $target = @(& $executable @configArgs --pick-worktree)
+        $target = @(& $executable @configArgs --jump-worktree)
         if (($LASTEXITCODE -eq 0) -and ($target.Count -eq 1) -and -not [string]::IsNullOrEmpty($target[0])) {{
             Microsoft.PowerShell.Management\Set-Location -LiteralPath $target[0] -ErrorAction Stop
             $global:__cj_down_route = $null
@@ -507,7 +510,7 @@ mod tests {
         )
         .unwrap();
         assert!(bash.contains(r#"\builtin bind -x '"\C-o":_cj_worktree_widget'"#));
-        assert!(bash.contains("\\command cj --pick-worktree"));
+        assert!(bash.contains("\\command cj --jump-worktree"));
 
         let zsh = render(Shell::Zsh, None, Some(KeyBinding::AltO), &Config::default()).unwrap();
         assert!(zsh.contains("\\builtin bindkey '^[o' _cj_worktree_widget"));
@@ -523,6 +526,24 @@ mod tests {
         assert!(powershell.contains("Set-PSReadLineKeyHandler -Chord 'Ctrl+o'"));
         assert!(powershell.contains("Microsoft.PowerShell.Management\\Set-Location"));
         assert!(!powershell.contains("Invoke-Expression"));
+    }
+
+    #[test]
+    fn wrappers_forward_jump_worktree_to_cj() {
+        let bash = render(Shell::Bash, None, None, &Config::default()).unwrap();
+        assert!(bash.contains("-jw|--jump-worktree)"));
+        assert!(bash.contains("-jw|--jump-worktree) _cj_args=(\"$@\")"));
+        assert!(!bash.contains("pick-worktree"));
+
+        let nu = render(Shell::Nu, None, None, &Config::default()).unwrap();
+        assert!(nu.contains("'-jw' '--jump-worktree'"));
+        assert!(nu.contains("^cj ...$config ...$invoke_args | complete"));
+        assert!(!nu.contains("pick-worktree"));
+
+        let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
+        assert!(powershell.contains("($first -ceq '-jw')"));
+        assert!(powershell.contains("($first -ceq '--jump-worktree')"));
+        assert!(!powershell.contains("pick-worktree"));
     }
 
     #[test]
