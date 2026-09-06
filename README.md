@@ -20,14 +20,15 @@ extracting it.
 
 `cj` supports Bash, Zsh, Nushell, and PowerShell. Generate integration and
 completion files, then load them from the matching shell configuration. `cj`
-prints source text by default; `init -o/--output` writes it to a file and creates
-missing parent directories. It never edits a shell configuration or profile.
+prints source text by default; `-o/--output` writes generated shell source to a
+file and creates missing parent directories. It never edits a shell configuration
+or profile.
 
 For Bash:
 
 ```bash
 cj init bash -o ~/.config/cj/init.bash
-cj completions bash > ~/.config/cj/completions.bash
+cj completions bash -o ~/.config/cj/completions.bash
 
 # Add to ~/.bashrc:
 source ~/.config/cj/init.bash
@@ -38,7 +39,7 @@ For Zsh:
 
 ```zsh
 cj init zsh -o ~/.config/cj/init.zsh
-cj completions zsh > ~/.config/cj/completions.zsh
+cj completions zsh -o ~/.config/cj/completions.zsh
 
 # Add to ~/.zshrc:
 autoload -Uz compinit && compinit
@@ -50,7 +51,7 @@ For Nushell:
 
 ```nu
 cj init nu -o ~/.config/nushell/cj.nu
-cj completions nu | save --force ~/.config/nushell/cj-completions.nu
+cj completions nu -o ~/.config/nushell/cj-completions.nu
 
 # Add to config.nu:
 use ~/.config/nushell/cj.nu *
@@ -62,7 +63,7 @@ For PowerShell 7:
 ```powershell
 $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
 cj init powershell --setup-key-binding -o (Join-Path $CjConfig 'init.ps1')
-cj completions powershell | Set-Content (Join-Path $CjConfig 'completions.ps1')
+cj completions powershell -o (Join-Path $CjConfig 'completions.ps1')
 
 # Add these lines to $PROFILE:
 $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'

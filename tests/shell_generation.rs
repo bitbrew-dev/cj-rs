@@ -78,29 +78,30 @@ fn generation_is_deterministic_and_keeps_source_on_stdout() {
 }
 
 #[test]
-fn init_output_creates_parents_and_replaces_the_file() {
+fn shell_output_creates_parents_and_replaces_the_file() {
     let temp = TempDir::new("init-output");
-    let path = temp.path().join("missing/parents/init.zsh");
-
-    let expected = cj(temp.path(), temp.path())
-        .args(["init", "zsh"])
-        .output()
-        .expect("generate shell source on stdout");
-    assert_success(&expected);
-
-    for flag in ["-o", "--output"] {
-        if path.exists() {
-            fs::write(&path, "stale source").expect("write stale shell source");
-        }
-        let output = cj(temp.path(), temp.path())
-            .args(["init", "zsh", flag])
-            .arg(&path)
+    for command in ["init", "completions"] {
+        let path = temp.path().join(format!("missing/{command}/source.zsh"));
+        let expected = cj(temp.path(), temp.path())
+            .args([command, "zsh"])
             .output()
-            .expect("write shell source to file");
-        assert_success(&output);
-        assert!(output.stdout.is_empty());
-        assert!(output.stderr.is_empty());
-        assert_eq!(fs::read(&path).expect("read shell source"), expected.stdout);
+            .expect("generate shell source on stdout");
+        assert_success(&expected);
+
+        for flag in ["-o", "--output"] {
+            if path.exists() {
+                fs::write(&path, "stale source").expect("write stale shell source");
+            }
+            let output = cj(temp.path(), temp.path())
+                .args([command, "zsh", flag])
+                .arg(&path)
+                .output()
+                .expect("write shell source to file");
+            assert_success(&output);
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+            assert_eq!(fs::read(&path).expect("read shell source"), expected.stdout);
+        }
     }
 }
 
@@ -264,6 +265,13 @@ fn bash_completion_handles_nested_commands_and_spaced_names() {
     );
     assert!(completed.lines().any(|value| value == "-o"));
     assert!(completed.lines().any(|value| value == "--output"));
+
+    let completion_flags = bash_complete(
+        &completions,
+        "COMP_WORDS=(cj completions zsh ''); COMP_CWORD=3",
+    );
+    assert!(completion_flags.lines().any(|value| value == "-o"));
+    assert!(completion_flags.lines().any(|value| value == "--output"));
 
     let worktree = bash_complete(&completions, "COMP_WORDS=(cj -w ''); COMP_CWORD=2");
     assert!(worktree.lines().any(|value| value == "--relative"));

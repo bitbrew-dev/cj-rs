@@ -10,7 +10,7 @@ Usage:
   cj [OPTIONS] config init [--preamp]
   cj [OPTIONS] mounts scan [--format table|json]
   cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]
-  cj [OPTIONS] completions <bash|zsh|nu|powershell>
+  cj [OPTIONS] completions <bash|zsh|nu|powershell> [-o PATH]
 
 Options:
   -C, --config <PATH>       Use a different config.toml
@@ -23,7 +23,7 @@ Options:
   -R, --relative           Render worktree paths relative to the current directory
       --pick-worktree      Select a worktree with fzf
       --setup-key-binding  Include the OS-specific fzf binding in shell setup
-  -o, --output <PATH>      Write shell setup to a file and create parent directories
+  -o, --output <PATH>      Write generated shell source and create parent directories
       --preamp             Add unambiguous mounts to a new config
   -h, --help               Print help
   -V, --version            Print version";
@@ -55,6 +55,7 @@ pub enum Command {
     },
     Completions {
         shell: Shell,
+        output: Option<PathBuf>,
     },
     ConfigInit {
         preamp: bool,
@@ -86,7 +87,7 @@ pub enum Shell {
     Pwsh,
 }
 
-struct InitOptions {
+struct ShellOptions {
     setup_key_binding: bool,
     output: Option<PathBuf>,
 }
@@ -193,7 +194,7 @@ impl Cli {
         {
             parse_init(
                 &targets,
-                InitOptions {
+                ShellOptions {
                     setup_key_binding,
                     output: output.clone(),
                 },
@@ -209,7 +210,10 @@ impl Cli {
         {
             parse_completions(
                 &targets,
-                setup_key_binding,
+                ShellOptions {
+                    setup_key_binding,
+                    output: output.clone(),
+                },
                 worktree,
                 format,
                 relative,
@@ -240,8 +244,10 @@ impl Cli {
             Command::Resolve { targets, resolver }
         };
 
-        if output.is_some() && !matches!(command, Command::Init { .. }) {
-            return Err("--output can only be used with init".into());
+        if output.is_some()
+            && !matches!(command, Command::Init { .. } | Command::Completions { .. })
+        {
+            return Err("--output can only be used with init or completions".into());
         }
 
         Ok(Self {
@@ -270,7 +276,7 @@ fn parse_format(value: &OsString) -> Result<OutputFormat, String> {
 
 fn parse_init(
     targets: &[OsString],
-    options: InitOptions,
+    options: ShellOptions,
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
@@ -300,21 +306,25 @@ fn parse_init(
 
 fn parse_completions(
     targets: &[OsString],
-    setup_key_binding: bool,
+    options: ShellOptions,
     worktree: bool,
     format: Option<OutputFormat>,
     relative: bool,
     pick: bool,
     preamp: bool,
 ) -> Result<Command, String> {
-    if setup_key_binding || worktree || format.is_some() || relative || pick || preamp {
-        return Err("worktree, output, and setup flags cannot be used with completions".into());
+    if options.setup_key_binding || worktree || format.is_some() || relative || pick || preamp {
+        return Err(
+            "worktree, format, relative, preamp, and setup flags cannot be used with completions"
+                .into(),
+        );
     }
     if targets.len() != 2 {
-        return Err("usage: cj completions <bash|zsh|nu|powershell>".into());
+        return Err("usage: cj completions <bash|zsh|nu|powershell> [-o PATH]".into());
     }
     Ok(Command::Completions {
         shell: parse_shell(&targets[1])?,
+        output: options.output,
     })
 }
 
@@ -513,7 +523,10 @@ mod tests {
                 Cli::parse(["completions", name].map(Into::into))
                     .unwrap()
                     .command,
-                Command::Completions { shell }
+                Command::Completions {
+                    shell,
+                    output: None,
+                }
             );
         }
     }
@@ -544,16 +557,32 @@ mod tests {
     }
 
     #[test]
-    fn output_is_scoped_to_init() {
-        for flag in ["-o", "--output"] {
+    fn output_is_scoped_to_shell_generation() {
+        for (command, flag) in [
+            ("init", "-o"),
+            ("init", "--output"),
+            ("completions", "-o"),
+            ("completions", "--output"),
+        ] {
+            let parsed = Cli::parse([command, "zsh", flag, "nested/source.zsh"].map(Into::into))
+                .unwrap()
+                .command;
+            if command == "completions" {
+                assert_eq!(
+                    parsed,
+                    Command::Completions {
+                        shell: Shell::Zsh,
+                        output: Some("nested/source.zsh".into()),
+                    }
+                );
+                continue;
+            }
             assert_eq!(
-                Cli::parse(["init", "zsh", flag, "nested/init.zsh"].map(Into::into))
-                    .unwrap()
-                    .command,
+                parsed,
                 Command::Init {
                     shell: Shell::Zsh,
                     setup_key_binding: false,
-                    output: Some("nested/init.zsh".into()),
+                    output: Some("nested/source.zsh".into()),
                 }
             );
         }
@@ -562,8 +591,8 @@ mod tests {
             Err("--output requires a path".into())
         );
         assert_eq!(
-            Cli::parse(["completions", "zsh", "-o", "out"].map(Into::into)),
-            Err("--output can only be used with init".into())
+            Cli::parse(["-o", "out", "top"].map(Into::into)),
+            Err("--output can only be used with init or completions".into())
         );
     }
 }

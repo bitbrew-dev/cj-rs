@@ -48,7 +48,10 @@ impl Execution {
     }
 }
 
-fn write_generated(path: &std::path::Path, source: String) -> Result<Execution, String> {
+fn generated(source: String, output: Option<PathBuf>) -> Result<Execution, String> {
+    let Some(path) = output else {
+        return Ok(Execution::stdout(source));
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -57,7 +60,7 @@ fn write_generated(path: &std::path::Path, source: String) -> Result<Execution, 
             )
         })?;
     }
-    std::fs::write(path, format!("{source}\n"))
+    std::fs::write(&path, format!("{source}\n"))
         .map_err(|error| format!("cannot write output {}: {error}", path.display()))?;
     Ok(Execution::silent())
 }
@@ -87,14 +90,11 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 setup_key_binding.then(|| config.key_binding()),
                 &config,
             )?;
-            match output {
-                Some(path) => write_generated(&path, source),
-                None => Ok(Execution::stdout(source)),
-            }
+            generated(source, output)
         }
-        Command::Completions { shell } => {
+        Command::Completions { shell, output } => {
             let config = config::Config::load(config_path.as_deref())?;
-            Ok(Execution::stdout(completions::render(shell, &config)))
+            generated(completions::render(shell, &config), output)
         }
         Command::Worktrees {
             format,

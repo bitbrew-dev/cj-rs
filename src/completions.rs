@@ -146,7 +146,7 @@ fn bash(destinations: &[String]) -> String {
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
                 init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
-                completions:) if [[ -n "$command_value" ]]; then candidates=("${{common_flags[@]}}"); else candidates=("${{shells[@]}}" "${{common_flags[@]}}"); fi ;;
+                completions:) if [[ -n "$command_value" ]]; then candidates=(-o --output "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
             ;;
@@ -234,7 +234,7 @@ _cj_complete() {{
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
                 init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
-                completions:) if [[ -n "$command_value" ]]; then candidates=("${{common_flags[@]}}"); else candidates=("${{shells[@]}}" "${{common_flags[@]}}"); fi ;;
+                completions:) if [[ -n "$command_value" ]]; then candidates=(-o --output "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
             ;;
@@ -294,6 +294,7 @@ export extern "cj init" [
 
 export extern "cj completions" [
     shell: string@"nu-complete cj shells"
+    --output(-o): path
     --config(-C): path
     --verbose(-v)
     --help(-h)
@@ -392,7 +393,7 @@ fn powershell(destinations: &[String]) -> String {
             'mounts:' {{ @('scan') + $commonFlags }}
             'mounts:scan' {{ @('-f', '--format') + $commonFlags }}
             'init:' {{ if ($commandValue) {{ @('-o', '--output', '--setup-key-binding') + $commonFlags }} else {{ $shells + @('-o', '--output', '--setup-key-binding') + $commonFlags }} }}
-            'completions:' {{ if ($commandValue) {{ $commonFlags }} else {{ $shells + $commonFlags }} }}
+            'completions:' {{ if ($commandValue) {{ @('-o', '--output') + $commonFlags }} else {{ $shells + @('-o', '--output') + $commonFlags }} }}
             default {{ $commands + $destinations + $flags }}
         }} }}
     }}
@@ -492,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_completions_offer_init_output() {
+    fn generated_completions_offer_shell_output() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Nu, Shell::Pwsh] {
             let output = render(shell, &configured());
             assert!(output.contains("-o"));
