@@ -7,6 +7,19 @@ fzf worktree picker while leaving the final directory change to your shell's rea
 
 ## Install
 
+### Homebrew
+
+The [Homebrew formula](https://github.com/benbenbang/homebrew-forge/blob/main/Formula/cj.rb)
+installs a prebuilt binary on macOS or Linux for ARM64 or x86_64 (Intel/AMD).
+The release repository is private, so provide a GitHub token that can read it:
+
+```bash
+export HOMEBREW_GITHUB_TEAM_BITBREW_DEV_API_TOKEN="$(gh auth token)"
+brew install benbenbang/forge/cj
+```
+
+### Cargo
+
 ```console
 cargo install cj-rs
 ```
@@ -14,9 +27,11 @@ cargo install cj-rs
 Building from source requires Rust 1.96.0 or newer. The same minimum version is
 pinned in `rust-toolchain.toml` and exercised by CI.
 
-Windows x64 release archives are also published as
-`cj-rs-<version>-x86_64-pc-windows-msvc.zip`; put `cj.exe` on `PATH` after
-extracting it.
+### Windows
+
+Download `cj-rs-<version>-x86_64-pc-windows-msvc.zip` from
+[GitHub Releases](https://github.com/bitbrew-dev/cj-rs/releases), extract it,
+and put `cj.exe` on `PATH`.
 
 `cj` supports Bash, Zsh, Nushell, and PowerShell. Generate integration and
 completion files, then load them from the matching shell configuration. `cj`
