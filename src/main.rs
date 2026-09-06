@@ -99,14 +99,14 @@ fn execute(cli: Cli) -> Result<Execution, String> {
         Command::Worktrees {
             format,
             relative,
-            pick: false,
+            jump: false,
         } => {
             let _config = config::Config::load(config_path.as_deref())?;
             let cwd = std::env::current_dir()
                 .map_err(|error| format!("cannot read current directory: {error}"))?;
             worktree::render(&worktree::list()?, format, relative, &cwd).map(Execution::stdout)
         }
-        Command::Worktrees { pick: true, .. } => {
+        Command::Worktrees { jump: true, .. } => {
             let config = config::Config::load(config_path.as_deref())?;
             worktree::pick(&worktree::list()?, &config.programs.fzf)?
                 .map(Execution::path)

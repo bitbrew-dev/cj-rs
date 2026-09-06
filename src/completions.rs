@@ -16,11 +16,12 @@ const FLAGS: &[&str] = &[
     "--no-zoxide",
     "-w",
     "--worktree",
+    "-jw",
+    "--jump-worktree",
     "-f",
     "--format",
     "-R",
     "--relative",
-    "--pick-worktree",
     "-h",
     "--help",
     "-V",
@@ -77,7 +78,7 @@ fn bash(destinations: &[String]) -> String {
     let formats = shell_array(FORMATS, quote_posix);
     format!(
         r#"_cj_complete() {{
-    local current previous command subcommand token candidate i command_value forced_resolve worktree_mode pick_mode literal_mode
+    local current previous command subcommand token candidate i command_value forced_resolve worktree_mode jump_mode literal_mode
     local -a candidates destinations flags common_flags commands shells formats
     COMPREPLY=()
     current="${{COMP_WORDS[COMP_CWORD]}}"
@@ -108,7 +109,7 @@ fn bash(destinations: &[String]) -> String {
             command_value=
             forced_resolve=
             worktree_mode=
-            pick_mode=
+            jump_mode=
             i=1
             while (( i < COMP_CWORD )); do
                 token="${{COMP_WORDS[i]}}"
@@ -117,7 +118,7 @@ fn bash(destinations: &[String]) -> String {
                     --) forced_resolve=1; command=; subcommand=; break ;;
                     -r|--raw|-z|--zoxide|-Z|--no-zoxide) forced_resolve=1; command=; subcommand=; ((i++)); continue ;;
                     -w|--worktree) worktree_mode=1; ((i++)); continue ;;
-                    --pick-worktree) worktree_mode=1; pick_mode=1; ((i++)); continue ;;
+                    -jw|--jump-worktree) worktree_mode=1; jump_mode=1; ((i++)); continue ;;
                     config|mounts|init|completions)
                         [[ -n "$forced_resolve" ]] && break
                         if [[ -z "$command" ]]; then command="$token"; else subcommand="$token"; fi
@@ -136,7 +137,7 @@ fn bash(destinations: &[String]) -> String {
             done
             if [[ -n "$forced_resolve" ]]; then
                 candidates=("${{destinations[@]}}" "${{common_flags[@]}}")
-            elif [[ -n "$pick_mode" ]]; then
+            elif [[ -n "$jump_mode" ]]; then
                 candidates=("${{common_flags[@]}}")
             elif [[ -n "$worktree_mode" ]]; then
                 candidates=(-f --format -R --relative "${{common_flags[@]}}")
@@ -170,7 +171,7 @@ fn zsh(destinations: &[String]) -> String {
     format!(
         r#"#compdef cj
 _cj_complete() {{
-    local previous command subcommand token command_value forced_resolve worktree_mode pick_mode literal_mode
+    local previous command subcommand token command_value forced_resolve worktree_mode jump_mode literal_mode
     local -i i
     local -a candidates destinations flags common_flags commands shells formats
     previous="${{words[CURRENT-1]-}}"
@@ -196,7 +197,7 @@ _cj_complete() {{
             command_value=
             forced_resolve=
             worktree_mode=
-            pick_mode=
+            jump_mode=
             i=2
             while (( i < CURRENT )); do
                 token="${{words[i]}}"
@@ -205,7 +206,7 @@ _cj_complete() {{
                     --) forced_resolve=1; command=; subcommand=; break ;;
                     -r|--raw|-z|--zoxide|-Z|--no-zoxide) forced_resolve=1; command=; subcommand=; ((i++)); continue ;;
                     -w|--worktree) worktree_mode=1; ((i++)); continue ;;
-                    --pick-worktree) worktree_mode=1; pick_mode=1; ((i++)); continue ;;
+                    -jw|--jump-worktree) worktree_mode=1; jump_mode=1; ((i++)); continue ;;
                     config|mounts|init|completions)
                         [[ -n "$forced_resolve" ]] && break
                         if [[ -z "$command" ]]; then command="$token"; else subcommand="$token"; fi
@@ -224,7 +225,7 @@ _cj_complete() {{
             done
             if [[ -n "$forced_resolve" ]]; then
                 candidates=("${{destinations[@]}}" "${{common_flags[@]}}")
-            elif [[ -n "$pick_mode" ]]; then
+            elif [[ -n "$jump_mode" ]]; then
                 candidates=("${{common_flags[@]}}")
             elif [[ -n "$worktree_mode" ]]; then
                 candidates=(-f --format -R --relative "${{common_flags[@]}}")
@@ -256,7 +257,7 @@ fn nu(destinations: &[String]) -> String {
     let destinations = nu_records(&destinations);
     format!(
         r#"def "nu-complete cj destinations" [] {{
-    [{destinations}]
+    [{destinations}, {{ value: '-jw', description: 'jump to a worktree with fzf' }}]
 }}
 
 def "nu-complete cj shells" [] {{
@@ -277,7 +278,7 @@ export extern cj [
     --worktree(-w)
     --format(-f): string@"nu-complete cj formats"
     --relative(-R)
-    --pick-worktree
+    --jump-worktree
     --help(-h)
     --version(-V)
 ]
@@ -365,7 +366,7 @@ fn powershell(destinations: &[String]) -> String {
         $commandValue = $false
         $forcedResolve = $false
         $worktreeMode = $false
-        $pickMode = $false
+        $jumpMode = $false
         $skipValue = $false
         $scanLimit = $elements.Count
         if (-not [string]::IsNullOrEmpty($wordToComplete)) {{ $scanLimit-- }}
@@ -376,7 +377,7 @@ fn powershell(destinations: &[String]) -> String {
             if ($token -ceq '--') {{ $forcedResolve = $true; $command = ''; $subcommand = ''; break }}
             if (($token -ceq '-r') -or ($token -ceq '--raw') -or ($token -ceq '-z') -or ($token -ceq '--zoxide') -or ($token -ceq '-Z') -or ($token -ceq '--no-zoxide')) {{ $forcedResolve = $true; $command = ''; $subcommand = ''; continue }}
             if (($token -ceq '-w') -or ($token -ceq '--worktree')) {{ $worktreeMode = $true; continue }}
-            if ($token -ceq '--pick-worktree') {{ $worktreeMode = $true; $pickMode = $true; continue }}
+            if (($token -ceq '-jw') -or ($token -ceq '--jump-worktree')) {{ $worktreeMode = $true; $jumpMode = $true; continue }}
             if ($token.StartsWith('-')) {{ continue }}
             if ([string]::IsNullOrEmpty($command)) {{
                 if (-not $forcedResolve -and ($commands -ccontains $token)) {{ $command = $token; continue }}
@@ -387,7 +388,7 @@ fn powershell(destinations: &[String]) -> String {
             if (($command -ceq 'init') -or ($command -ceq 'completions')) {{ $commandValue = $true }}
             break
         }}
-        $candidates = if ($forcedResolve) {{ $destinations + $commonFlags }} elseif ($pickMode) {{ $commonFlags }} elseif ($worktreeMode) {{ @('-f', '--format', '-R', '--relative') + $commonFlags }} else {{ switch ("$command`:$subcommand") {{
+        $candidates = if ($forcedResolve) {{ $destinations + $commonFlags }} elseif ($jumpMode) {{ $commonFlags }} elseif ($worktreeMode) {{ @('-f', '--format', '-R', '--relative') + $commonFlags }} else {{ switch ("$command`:$subcommand") {{
             'config:' {{ @('init') + $commonFlags }}
             'config:init' {{ @('--preamp') + $commonFlags }}
             'mounts:' {{ @('scan') + $commonFlags }}
@@ -498,6 +499,16 @@ mod tests {
             let output = render(shell, &configured());
             assert!(output.contains("-o"));
             assert!(output.contains("--output"));
+        }
+    }
+
+    #[test]
+    fn generated_completions_offer_canonical_worktree_jump() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Nu, Shell::Pwsh] {
+            let output = render(shell, &configured());
+            assert!(output.contains("-jw"));
+            assert!(output.contains("--jump-worktree"));
+            assert!(!output.contains("--pick-worktree"));
         }
     }
 
