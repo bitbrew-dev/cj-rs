@@ -508,9 +508,45 @@ function global:cd {{
     }}
 }}
 
-Register-ArgumentCompleter -Native -CommandName cd -ScriptBlock {{
-    param($wordToComplete, $commandAst, $cursorPosition)
-    Complete-CjCdArgument $wordToComplete
+if (Test-Path Function:TabExpansion2) {{
+    if (-not (Test-Path Variable:script:__cj_tab_expansion2)) {{
+        $script:__cj_tab_expansion2 = $function:TabExpansion2
+    }}
+    function global:TabExpansion2 {{
+        [CmdletBinding(DefaultParameterSetName = 'ScriptInputSet')]
+        param(
+            [Parameter(ParameterSetName = 'ScriptInputSet', Mandatory = $true, Position = 0)]
+            [string]$inputScript,
+            [Parameter(ParameterSetName = 'ScriptInputSet', Position = 1)]
+            [int]$cursorColumn = $inputScript.Length,
+            [Parameter(ParameterSetName = 'AstInputSet', Mandatory = $true, Position = 0)]
+            [System.Management.Automation.Language.Ast]$ast,
+            [Parameter(ParameterSetName = 'AstInputSet', Mandatory = $true, Position = 1)]
+            [System.Management.Automation.Language.Token[]]$tokens,
+            [Parameter(ParameterSetName = 'AstInputSet', Mandatory = $true, Position = 2)]
+            [System.Management.Automation.Language.IScriptPosition]$positionOfCursor,
+            [Parameter(ParameterSetName = 'ScriptInputSet', Position = 2)]
+            [Parameter(ParameterSetName = 'AstInputSet', Position = 3)]
+            [hashtable]$options = $null
+        )
+
+        if ($PSCmdlet.ParameterSetName -ceq 'ScriptInputSet') {{
+            $beforeCursor = $inputScript.Substring(0, $cursorColumn)
+            $jump = [regex]::Match($beforeCursor, '^\s*cd\s+(?<flag>-jw|--jump-worktree)$')
+            if ($jump.Success) {{
+                $matches = @(Complete-CjCdArgument $jump.Groups['flag'].Value)
+                $results = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
+                if ($matches.Count -eq 1) {{ [void]$results.Add($matches[0]) }}
+                return [System.Management.Automation.CommandCompletion]::new(
+                    $results,
+                    -1,
+                    $jump.Groups['flag'].Index,
+                    $jump.Groups['flag'].Length
+                )
+            }}
+        }}
+        return & $script:__cj_tab_expansion2 @PSBoundParameters
+    }}
 }}"#
     );
     Ok(match binding {
@@ -666,9 +702,8 @@ mod tests {
         let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
         assert!(powershell.contains("function script:Complete-CjCdArgument"));
         assert!(powershell.contains("$cjArgs = @($args)"));
-        assert!(
-            powershell.contains("Register-ArgumentCompleter -Native -CommandName cd -ScriptBlock")
-        );
+        assert!(powershell.contains("function global:TabExpansion2"));
+        assert!(powershell.contains("$script:__cj_tab_expansion2 @PSBoundParameters"));
         assert!(powershell.contains("CompletionCompleters]::CompleteFilename"));
         assert!(!powershell.contains("Set-PSReadLineKeyHandler -Key Tab"));
 

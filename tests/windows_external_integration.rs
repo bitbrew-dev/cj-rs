@@ -172,7 +172,7 @@ foreach ($flag in @('-jw', '--jump-worktree')) {
     $quoted = "'" + $selected.Replace("'", "''") + "'"
     if ($matches[0].CompletionText -cne $quoted) { throw "completion is not safely quoted: $($matches[0].CompletionText)" }
     $line = "cd $flag"
-    $wired = @([System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches)
+    $wired = @(TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches
     if ($wired.Count -ne 1 -or -not [System.IO.Path]::GetFullPath($wired[0].ListItemText).Equals([System.IO.Path]::GetFullPath($expected), [System.StringComparison]::OrdinalIgnoreCase)) { throw "cd argument completer is not wired for $flag" }
     if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'completion changed directory' }
 }
