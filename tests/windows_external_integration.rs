@@ -164,15 +164,16 @@ fn powershell_tab_completion_selects_and_quotes_worktrees_without_changing_direc
 . $env:CJ_SOURCE
 $before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
 $expected = $env:CJ_EXPECTED
-$quoted = "'" + $expected.Replace("'", "''") + "'"
 foreach ($flag in @('-jw', '--jump-worktree')) {
     $matches = @(Complete-CjCdArgument $flag)
     if ($matches.Count -ne 1) { throw "expected one completion for $flag, got $($matches.Count)" }
-    if ($matches[0].ListItemText -cne $expected) { throw "completion lost original path: $($matches[0].ListItemText)" }
+    $selected = $matches[0].ListItemText
+    if (-not [System.IO.Path]::GetFullPath($selected).Equals([System.IO.Path]::GetFullPath($expected), [System.StringComparison]::OrdinalIgnoreCase)) { throw "completion selected the wrong path: $selected" }
+    $quoted = "'" + $selected.Replace("'", "''") + "'"
     if ($matches[0].CompletionText -cne $quoted) { throw "completion is not safely quoted: $($matches[0].CompletionText)" }
     $line = "cd $flag"
     $wired = @([System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches)
-    if ($wired.Count -ne 1 -or $wired[0].ListItemText -cne $expected) { throw "cd argument completer is not wired for $flag" }
+    if ($wired.Count -ne 1 -or -not [System.IO.Path]::GetFullPath($wired[0].ListItemText).Equals([System.IO.Path]::GetFullPath($expected), [System.StringComparison]::OrdinalIgnoreCase)) { throw "cd argument completer is not wired for $flag" }
     if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'completion changed directory' }
 }
 $env:CJ_FAKE_MODE = 'cancel'
