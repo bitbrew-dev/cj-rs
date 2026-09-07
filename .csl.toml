@@ -1,0 +1,422 @@
+# Consilium Configuration Schema
+#:schema https://raw.githubusercontent.com/benbenbang/polyconf/refs/tags/0.1.0/src/polyconf/schemas/consilium/csl-config.schema.json
+# Complete reference showing all available configuration options
+# Uncomment and modify options as needed for your project
+
+# ============================================================================
+# COMMIT MESSAGE CONFIGURATION
+# ============================================================================
+
+[commit]
+# Require scope in commit messages (default: false)
+# When true, commits must include scope: type(scope): description
+# require_scope = true
+
+# Require body in commit messages (default: false)
+# When true, commits must include a body section after the subject line
+# require_body = false
+
+# Maximum subject line length in characters (default: 72)
+# Follows conventional commits recommendation of 50-72 characters
+# max_subject_length = 72
+
+# Show header when generating commit messages (default: true)
+# Set to false when using prepare-commit-msg hook to avoid extra output in editor
+# show_header = true
+
+# ============================================================================
+# COMMIT TYPES
+# ============================================================================
+# Define which commit types are allowed
+# If omitted, all conventional commit types are allowed
+# Uncomment to customize available types
+
+# [[commit.types]]
+# name = "feat"
+# description = "Introduces a new feature or capability to users"
+# enabled = true
+
+# [[commit.types]]
+# name = "fix"
+# description = "Resolves a bug or defect in existing functionality"
+# enabled = true
+
+# [[commit.types]]
+# name = "docs"
+# description = "Updates or adds documentation without code changes"
+# enabled = true
+
+# [[commit.types]]
+# name = "refactor"
+# description = "A code change that neither fixes a bug nor adds a feature"
+# enabled = true
+
+# [[commit.types]]
+# name = "test"
+# description = "Adding missing tests or correcting existing tests"
+# enabled = true
+
+# [[commit.types]]
+# name = "perf"
+# description = "A code change that improves performance"
+# enabled = true
+
+# [[commit.types]]
+# name = "build"
+# description = "Changes that affect the build system or external dependencies"
+# enabled = true
+
+# [[commit.types]]
+# name = "ci"
+# description = "Changes to CI configuration files and scripts"
+# enabled = true
+
+# [[commit.types]]
+# name = "chore"
+# description = "Other changes that don't modify src or test files"
+# enabled = true
+
+# [[commit.types]]
+# name = "style"
+# description = "Changes that do not affect the meaning of the code"
+# enabled = true
+
+# [[commit.types]]
+# name = "release"
+# description = "Release version updates and tagging"
+# enabled = true
+
+# ============================================================================
+# SCOPE VALIDATION
+# ============================================================================
+# Configure how scopes are validated
+# NOTE: If [commit.validation].pattern is defined with scope regex,
+#       [commit.scope].mode = "regex" will be ignored (warning shown)
+
+[commit.scope]
+# Validation mode (default: "regex")
+# Options:
+#   - "none": No scope validation, scope format is not enforced
+#   - "regex": Scope must match the pattern below
+#   - "allowed-list": Scope must be in the allowed list below
+# mode = "regex"
+
+# Regex pattern for scope validation (used when mode = "regex")
+# Default pattern allows lowercase letters, numbers, and hyphens
+# pattern = "^[a-z0-9-]+$"
+
+# Allowed scopes list (used when mode = "allowed-list")
+# Scope must be one of these values
+# allowed = ["api", "cli", "config", "core", "db", "ui"]
+
+# Monorepo path mappings for automatic scope detection
+# Maps file path prefixes to scope names
+# When files in these paths are changed, the corresponding scope is suggested
+[commit.scope.mappings]
+# "cmd/" = "cmd"
+# "internal/git/" = "git"
+# "internal/llm/" = "llm"
+# "internal/http/" = "http"
+# "pkg/commitmsg/" = "commitmsg"
+# "pkg/config/" = "config"
+# "pkg/log/" = "log"
+# "examples/" = "examples"
+# "_docs/" = "docs"
+# ".github/" = "ci"
+
+# ============================================================================
+# VALIDATION PATTERN (ADVANCED)
+# ============================================================================
+# Full regex pattern for commit message validation
+# When enabled, this takes priority over granular configs
+#
+# MUTUAL EXCLUSIVITY:
+#   - validation.pattern + scope.regex = CONFLICT (warning, pattern wins)
+#   - validation.pattern + scope.allowed-list = OK (both used)
+
+# [commit.validation]
+# Enable custom validation pattern (default: false)
+# enabled = false
+
+# Full regex pattern covering entire commit message format
+# Default pattern follows semantic-release conventions and supports:
+# - All conventional commit types (build, ci, docs, feat, fix, perf, refactor, style, test, ops, hotfix, release, chore)
+# - Required scope with flexible characters (allows dots, slashes, parens for nested scopes)
+# - Optional breaking change indicator (!)
+# - Any description text
+# pattern = "^(build|ci|docs|feat|fix|perf|refactor|style|test|ops|hotfix|release|chore)\\([\\w,\\.,\\-,\\(,\\),\\/]+\\)(!?)(:)\\s{1}([\\w,\\W,:]+)$"
+
+# Simpler pattern example (optional scope, max 50 chars):
+# pattern = "^(feat|fix)(\\(.+\\))?: .{1,50}$"
+
+# ============================================================================
+# LLM PROVIDER CONFIGURATION
+# ============================================================================
+
+[llm]
+# Provider selection (required)
+# Options: anthropic, openai, ollama, grok, gemini, gemini-cli, claude-code, mistral, bedrock
+provider = "openai"
+
+# claude-code session handling (only used by the claude-code provider).
+# "ephemeral" (default) runs claude with --no-session-persistence so commit
+# generation never clutters your session history. Any other value reuses a
+# session: it resumes that session by title or UUID (claude -p --resume <value>),
+# creating it on first use, so every run continues the same one. A name like
+# "planner" is created with -n; a UUID targets that exact session.
+# claude_code_session = "ephemeral"
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+# Preferred nested authentication layout for cloud providers.
+#
+# [llm.auth]
+# method = "api_key" # api_key or iam
+#
+# [llm.auth.aws]
+# region = "us-east-1"
+# profile = "my-company"
+#
+# [llm.auth.gcloud]
+# project = "my-project"
+#
+# [llm.auth.azure]
+# tenant_id = "tenant-id"
+# client_id = "client-id"
+
+# API Key (for api_key auth method)
+# Use environment variable expansion to avoid committing secrets
+# Syntax: $VAR_NAME or ${VAR_NAME}
+# Anthropic: $ANTHROPIC_API_KEY or ${ANTHROPIC_API_KEY}
+# OpenAI: $OPENAI_API_KEY
+# Grok: $XAI_API_KEY
+# Gemini: $GEMINI_API_KEY
+# Mistral: $MISTRAL_API_KEY
+# Ollama/Bedrock/Claude Code do not use API keys and ignore inherited keys
+# Tip: Using $VAR syntax prevents editor warnings about committed secrets
+api_key = "${OPENAI_API_CSL_KEY}"
+
+# Base URL / host (optional; currently used by Ollama)
+# Must start with http:// or https://
+# Defaults to OLLAMA_HOST or http://localhost:11434
+# base_url = "http://192.168.1.10:11434"
+# host = "http://192.168.1.10:11434"
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+
+# Model name (optional, uses provider default if not specified)
+#
+# Anthropic models:
+#   - claude-sonnet-4-6 (recommended)
+#   - claude-haiku-4-5 (fast and cheap)
+#   - claude-opus-4-8 (most powerful)
+#
+# OpenAI models:
+#   - gpt-5.1 (latest, released Nov 2025)
+#   - gpt-5 (uses max_completion_tokens)
+#   - gpt-5-mini (balanced)
+#   - gpt-5-nano (fast)
+#   - gpt-4o (previous generation)
+#
+# Ollama models (must specify):
+#   Any model available in Ollama's library can be used
+#   Pull models with: ollama pull <model-name>
+#   Popular options:
+#   - llama3.3 (latest Llama model)
+#   - llama3.1, llama3
+#   - mistral, mixtral
+#   - codellama, deepseek-coder
+#   - qwen, phi, gemma
+#   See full list: https://ollama.com/library
+#
+# Grok models:
+#   - grok-4-fast-reasoning (recommended)
+#   - grok-4-fast-non-reasoning
+#   - grok-code-fast-1
+#
+# Gemini models:
+#   - gemini-2.5-flash (fast and cheap, recommended)
+#   - gemini-2.5-pro (most powerful)
+#
+# Mistral models:
+#   - mistral-small-latest (very cheap, recommended)
+#   - mistral-medium-latest (balanced)
+#   - mistral-large-latest (most powerful)
+#
+# Bedrock models (Claude on AWS):
+#   Note: Uses cross-region inference prefix (e.g., us., eu.)
+#   - us.anthropic.claude-sonnet-4-6 (recommended)
+#   - us.anthropic.claude-haiku-4-5 (fast and cheap)
+#   - us.anthropic.claude-opus-4-8 (most powerful, requires support approval)
+#
+model = "gpt-5.6-sol"
+
+# Temperature for LLM generation (default: 0.7)
+# Temperature is sent ONLY when set here; if omitted, the provider uses its own default.
+# Note: Temperature ranges vary by provider - check provider docs for exact limits
+#   - Anthropic: Supported, EXCEPT Claude Opus 4.7+, which reject it; csl omits it for those
+#   - OpenAI: Supported, EXCEPT gpt-5 and o-series, which reject it; csl omits it for those
+#   - Ollama: Supported (typical range 0.0-2.0)
+#   - Grok: Supported (OpenAI-compatible)
+#   - Gemini: Supported (typical range 0.0-2.0)
+#   - gemini-cli: Supported, but Gemini 3 works best at 1.0; lower values can hurt reasoning
+#   - Mistral: Supported (typical range 0.0-1.0)
+#   - Bedrock: Supported, EXCEPT Claude Opus 4.7+, which reject it; csl omits it for those
+# Lower (0.0-0.3) = More focused and deterministic
+# Medium (0.4-0.9) = Balanced creativity and consistency (recommended)
+# Higher (1.0+) = More creative and varied output
+# temperature = 0.7
+
+# Maximum tokens for LLM response (default: 1024)
+# Note: OpenAI reasoning models (gpt-5, o1, o3) may need 4096+ tokens
+# Most commit messages need 100-500 tokens
+# max_tokens = 1024
+
+# Reasoning effort level (optional, Anthropic only)
+# Sent as output_config.effort on the Messages API to control how much the
+# model thinks and acts. Omit to use the provider default (Anthropic: high).
+# Options: low | medium | high | xhigh | max
+#   - max: Opus 4.6+ only
+#   - xhigh: Opus 4.7+ only
+# Sonnet 4.5 and Haiku 4.5 do NOT support effort and will return an API error.
+# effort = "high"
+
+# ============================================================================
+# CUSTOM PROMPT PREFERENCES
+# ============================================================================
+# Additional instructions for the LLM to customize commit message style
+# This is included in the prompt sent to the LLM
+# Use this to specify formatting, structure, or style preferences
+
+# prompt_preferences = """
+# Use this format:
+# <summary>
+#
+# - List specific changes made
+# - Each change as a separate bullet point
+#
+# ---
+#
+# Provide additional context or explanation if needed.
+# Example: This change improves performance by optimizing the database query.
+# """
+
+# ============================================================================
+# EXAMPLES CONFIGURATION
+# ============================================================================
+# Control commit message examples shown to LLM for learning your style
+
+# examples: Control commit message examples shown to LLM (default: "default")
+# Options:
+#   - "none": No examples (use when you have detailed prompt_preferences)
+#   - "default": Use built-in conventional commit examples
+#   - "custom": Load examples from file (requires examples_file)
+# examples = "default"
+
+# examples_file: Path to file containing custom commit message examples
+# Only used when examples = "custom"
+# Format: Separate each example with "---" on its own line
+# Supports ~ expansion for home directory
+# Example: "~/.config/csl/my-examples.txt"
+# See examples/custom-examples.txt for file format reference
+# examples_file = ""
+
+# ============================================================================
+# UI THEME CONFIGURATION
+# ============================================================================
+# Configure color themes for terminal output
+
+[ui]
+# Theme name (default: "Dracula")
+# Built-in themes available (20 total):
+#   - Dracula, Nord, Nord Light
+#   - Rosé Pine, Rosé Pine Moon, Rosé Pine Dawn
+#   - Tokyo Night, Tokyo Night Storm, Tokyo Night Light
+#   - Catppuccin Mocha, Catppuccin Frappé, Catppuccin Latte, Catppuccin Macchiato
+#   - Kanagawa Wave, Kanagawa Dragon, Kanagawa Lotus
+#   - Gruvbox, Atom, Solarized Dark, Monokai Dark
+# Run 'csl theme list' to see all available themes with previews
+# theme = "Dracula"
+
+# Custom theme file path (optional)
+# Overrides the theme setting if specified
+# Format: JSON file with ANSI terminal colors
+# Example: "~/.config/csl/themes/my-theme.json"
+# theme_path = ""
+
+# Show progress spinner during LLM generation (default: true)
+# Displays animated spinner with status messages while waiting for AI response
+# Automatically disabled when:
+#   - Running in git hook (to avoid breaking editor)
+#   - Output is piped (not a terminal)
+# Set to false to always use quiet output
+# show_progress = true
+
+# ============================================================================
+# STREAMING MODE (ADVANCED)
+# ============================================================================
+# Configure how diffs are processed for commit message generation
+# WARNING: Streaming mode uses multiple API calls (3-5x cost)
+# Recommended for large diffs with Ollama (free local) or when you have credits to burn
+
+[stream]
+# mode: How to process diffs (default: "spinner")
+# Options:
+#   - "spinner": Single API call with progress animation (fast, cheap, recommended)
+#   - "streaming": Per-file review then synthesis (slow, expensive, better UX for large diffs)
+# mode = "spinner"
+
+# threshold: Minimum total lines (insertions + deletions) to activate streaming
+# Only used when mode = "streaming"
+# Files below threshold use spinner mode even if streaming is enabled
+# Default: 500 lines
+# threshold = 500
+
+# ============================================================================
+# CONDITIONAL INCLUDES (ADVANCED)
+# ============================================================================
+# Include additional config files based on git directory
+# Similar to Git's includeIf directive
+# Later configs override earlier ones (scalars), replace arrays
+
+# [[include]]
+# Condition: Include when in this git directory (supports ~ expansion)
+# when = "gitdir:~/work/"
+# Path to config file to include (supports ~ expansion)
+# path = "~/.config/csl/work.toml"
+
+# [[include]]
+# when = "gitdir:~/personal/"
+# path = "~/.config/csl/personal.toml"
+
+# Example use case: Different LLM providers for work vs personal projects
+# work.toml:     provider = "bedrock", auth.aws.profile = "company"
+# personal.toml: provider = "ollama" (free local)
+
+# ============================================================================
+# NOTES
+# ============================================================================
+
+# Priority Order (highest to lowest):
+# 1. Closest .csl.toml (walk up from current directory to repo root)
+# 2. Closest .pre-commit-config.yaml (walk up from current directory to repo root)
+# 3. Global ~/.config/csl/csl.toml (with includeIf support)
+# 4. Flexible mode (no validation)
+
+# Mutual Exclusivity:
+# - validation.pattern + scope.regex = Conflict (warning, pattern wins)
+# - validation.pattern + scope.allowed-list = OK (both used)
+# - scope.regex + scope.allowed-list = Conflict (pick one)
+
+# Merge Strategy (for includeIf):
+# - Scalar values (strings, ints, bools): Last write wins (override)
+# - Arrays ([[commit.types]]): Complete replacement (not append)
+# - Maps ([commit.scope.mappings]): Merge keys (later keys override)
+
+# Warnings vs Errors:
+# - Warning (continue): Conflicts, missing patterns, env var not found
+# - Error (stop): Invalid syntax, can't compile regex, missing required fields
