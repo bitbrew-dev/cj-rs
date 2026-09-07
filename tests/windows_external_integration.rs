@@ -140,6 +140,76 @@ fn powershell_wrapper_jumps_to_the_selected_worktree() {
     assert_eq!(output.stdout, git.linked.as_os_str().as_encoded_bytes());
 }
 
+#[test]
+fn powershell_tab_completion_selects_and_quotes_worktrees_without_changing_directory() {
+    let git = GitFixture::new("windows-tab-completion-雪");
+    let ordinary = git.main_nested.join("ordinary completion directory");
+    fs::create_dir(&ordinary).expect("create ordinary completion directory");
+    let tool = copy_tool(git.temp.path(), "fzf.exe");
+    let config = git.temp.path().join("fzf completion config.toml");
+    let source = git.temp.path().join("cj completion.ps1");
+    let args = git.temp.path().join("fzf completion args");
+    let stdin = git.temp.path().join("fzf completion stdin");
+    write_config(&config, Path::new("missing-zoxide.exe"), &tool);
+    let init = cj(&git.main_nested, git.temp.path())
+        .arg("-C")
+        .arg(&config)
+        .args(["init", "powershell"])
+        .output()
+        .expect("generate PowerShell integration");
+    assert_success(&init);
+    fs::write(&source, init.stdout).expect("write PowerShell integration");
+
+    let script = r#"$ErrorActionPreference = 'Stop'
+. $env:CJ_SOURCE
+$before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
+$expected = $env:CJ_EXPECTED
+$quoted = "'" + $expected.Replace("'", "''") + "'"
+foreach ($flag in @('-jw', '--jump-worktree')) {
+    $matches = @(Complete-CjCdArgument $flag)
+    if ($matches.Count -ne 1) { throw "expected one completion for $flag, got $($matches.Count)" }
+    if ($matches[0].ListItemText -cne $expected) { throw "completion lost original path: $($matches[0].ListItemText)" }
+    if ($matches[0].CompletionText -cne $quoted) { throw "completion is not safely quoted: $($matches[0].CompletionText)" }
+    $line = "cd $flag"
+    $wired = @([System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches)
+    if ($wired.Count -ne 1 -or $wired[0].ListItemText -cne $expected) { throw "cd argument completer is not wired for $flag" }
+    if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'completion changed directory' }
+}
+$env:CJ_FAKE_MODE = 'cancel'
+$cancelled = @(Complete-CjCdArgument '-jw')
+if ($cancelled.Count -ne 0) { throw 'cancellation replaced the command token' }
+if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'cancellation changed directory' }
+$directories = @(Complete-CjCdArgument 'ordinary')
+if (-not ($directories | Where-Object { $_.ListItemText -like '*ordinary completion directory*' })) { throw 'normal directory completion was not preserved' }
+[Console]::Out.Write('ok')
+"#;
+    let output = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .current_dir(&git.main_nested)
+        .env("CJ_SOURCE", source)
+        .env("CJ_EXPECTED", &git.linked)
+        .env("CJ_FAKE_TOOL", "fzf")
+        .env("CJ_FAKE_MODE", "success")
+        .env("CJ_FAKE_SELECTION", "1")
+        .env("CJ_FAKE_ARGS", args)
+        .env("CJ_FAKE_STDIN", stdin)
+        .env("PATH", path_with_cj())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .output()
+        .expect("run PowerShell completion");
+    assert_success(&output);
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty());
+}
+
 struct ToolFixture {
     temp: TempDir,
     cwd: PathBuf,

@@ -293,6 +293,142 @@ fn generated_wrappers_jump_to_the_selected_worktree() {
 }
 
 #[test]
+fn generated_posix_tab_completion_selects_worktrees_without_changing_directory() {
+    let fixture = PickerFixture::new("fzf-tab-completion-雪");
+    let ordinary = fixture.git.main_nested.join("ordinary directory");
+    fs::create_dir(&ordinary).expect("create ordinary completion directory");
+    let binary_dir = fixture.git.temp.path().join("completion binary dir");
+    fs::create_dir_all(&binary_dir).expect("create binary directory");
+    symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
+    let mut paths = vec![binary_dir];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let path = env::join_paths(paths).expect("join PATH");
+    let mut exercised = 0;
+
+    for shell in ["bash", "zsh"] {
+        let init = cj(&fixture.git.main_nested, fixture.git.temp.path())
+            .arg("-C")
+            .arg(&fixture.config)
+            .args(["init", shell])
+            .output()
+            .expect("render shell setup");
+        assert_success(&init);
+
+        for flag in ["-jw", "--jump-worktree"] {
+            let script = if shell == "bash" {
+                concat!(
+                    "eval \"$1\"; COMP_WORDS=(cd \"$2\"); COMP_CWORD=1; ",
+                    "_cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\" ",
+                    "\"${COMP_WORDS[COMP_CWORD]}\" \"$PWD\""
+                )
+            } else {
+                concat!(
+                    "eval \"$1\"; typeset -ga words; words=(cd \"$2\"); integer CURRENT=2; ",
+                    "compadd() { while (( $# )); do case \"$1\" in -f|--) shift ;; ",
+                    "*) printf '%s\\000' \"$1\"; shift ;; esac; done; }; ",
+                    "_cj_complete_cd; printf '%s\\000' \"${words[CURRENT]}\" \"$PWD\""
+                )
+            };
+            let mut command = shell_with_setup(shell, &init.stdout, script);
+            command
+                .arg(flag)
+                .current_dir(&fixture.git.main_nested)
+                .env("PATH", &path)
+                .env("CJ_FAKE_ARGS", &fixture.args)
+                .env("CJ_FAKE_STDIN", &fixture.stdin)
+                .env("CJ_FAKE_MODE", "success")
+                .env("CJ_FAKE_SELECTION", "1");
+            let output = match command.output() {
+                Ok(output) => output,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("cannot run {shell}: {error}"),
+            };
+            exercised += 1;
+            assert_success(&output);
+            assert!(output.stderr.is_empty());
+            let fields = nul_strings(&output.stdout);
+            assert_eq!(fields[0], fixture.git.linked.to_str().unwrap());
+            assert_eq!(fields[1], flag);
+            assert_eq!(fields[2], fixture.git.main_nested.to_str().unwrap());
+        }
+
+        let script = if shell == "bash" {
+            concat!(
+                "eval \"$1\"; COMP_WORDS=(cd -jw); COMP_CWORD=1; ",
+                "_cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\" ",
+                "\"${COMP_WORDS[COMP_CWORD]}\" \"$PWD\""
+            )
+        } else {
+            concat!(
+                "eval \"$1\"; typeset -ga words; words=(cd -jw); integer CURRENT=2; ",
+                "compadd() { return 99; }; _cj_complete_cd || :; ",
+                "printf '%s\\000' \"${words[CURRENT]}\" \"$PWD\""
+            )
+        };
+        let mut cancelled = shell_with_setup(shell, &init.stdout, script);
+        cancelled
+            .current_dir(&fixture.git.main_nested)
+            .env("PATH", &path)
+            .env("CJ_FAKE_ARGS", &fixture.args)
+            .env("CJ_FAKE_STDIN", &fixture.stdin)
+            .env("CJ_FAKE_MODE", "cancel");
+        let cancelled = match cancelled.output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("cannot run {shell}: {error}"),
+        };
+        assert_success(&cancelled);
+        assert!(cancelled.stderr.is_empty());
+        let fields = nul_strings(&cancelled.stdout);
+        assert_eq!(fields[fields.len() - 2], "-jw");
+        assert_eq!(
+            fields[fields.len() - 1],
+            fixture.git.main_nested.to_str().unwrap()
+        );
+
+        if shell == "bash" {
+            let mut ordinary = shell_with_setup(
+                shell,
+                &init.stdout,
+                concat!(
+                    "eval \"$1\"; COMP_WORDS=(cd ordinary); COMP_CWORD=1; ",
+                    "_cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\" \"$PWD\""
+                ),
+            );
+            ordinary
+                .current_dir(&fixture.git.main_nested)
+                .env("PATH", &path);
+            let ordinary = ordinary.output().expect("run Bash directory completion");
+            assert_success(&ordinary);
+            assert!(nul_strings(&ordinary.stdout).contains(&"ordinary directory"));
+        } else {
+            let mut ordinary = shell_with_setup(
+                shell,
+                &init.stdout,
+                concat!(
+                    "eval \"$1\"; typeset -ga words; words=(cd ordinary); integer CURRENT=2; ",
+                    "compadd() { :; }; _cd() { printf 'native-directory-completion\\000'; }; ",
+                    "_cj_complete_cd; printf '%s\\000' \"$PWD\""
+                ),
+            );
+            ordinary
+                .current_dir(&fixture.git.main_nested)
+                .env("PATH", &path);
+            let ordinary = ordinary.output().expect("run Zsh directory completion");
+            assert_success(&ordinary);
+            assert_eq!(
+                nul_strings(&ordinary.stdout),
+                [
+                    "native-directory-completion",
+                    fixture.git.main_nested.to_str().unwrap()
+                ]
+            );
+        }
+    }
+    assert!(exercised > 0, "neither bash nor zsh is available");
+}
+
+#[test]
 fn generated_wrappers_jump_and_propagate_failures() {
     let fixture = ToolFixture::new("shell-wrapper");
     let binary_dir = fixture.temp.path().join("binary dir");

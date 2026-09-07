@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::cli::Shell;
-use crate::config::{Config, KeyBinding, Tickers};
+use crate::config::{Config, KeyBinding};
 
 pub fn render(
     shell: Shell,
@@ -10,9 +10,9 @@ pub fn render(
     config: &Config,
 ) -> Result<String, String> {
     match shell {
-        Shell::Bash | Shell::Zsh => render_posix(shell, config_path, binding, &config.tickers),
+        Shell::Bash | Shell::Zsh => render_posix(shell, config_path, binding, config),
         Shell::Nu => render_nu(config_path, config),
-        Shell::Pwsh => render_powershell(config_path, binding, &config.tickers),
+        Shell::Pwsh => render_powershell(config_path, binding, config),
     }
 }
 
@@ -20,7 +20,7 @@ fn render_posix(
     shell: Shell,
     config_path: Option<&Path>,
     binding: Option<KeyBinding>,
-    tickers: &Tickers,
+    settings: &Config,
 ) -> Result<String, String> {
     let config = config_path
         .map(absolute)
@@ -28,8 +28,13 @@ fn render_posix(
         .map(|path| format!(" -C {}", quote(&path.to_string_lossy())))
         .unwrap_or_default();
     let builtin = "builtin";
-    let navigate_up = quote(&tickers.navigate_up);
-    let navigate_down = quote(&tickers.navigate_down);
+    let navigate_up = quote(&settings.tickers.navigate_up);
+    let navigate_down = quote(&settings.tickers.navigate_down);
+    let destinations = crate::completions::destinations(settings)
+        .iter()
+        .map(|value| quote(value))
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let wrapper = format!(
         r#"_cj_navigate_up={navigate_up}
@@ -136,7 +141,64 @@ function cd() {{
             ;;
     esac
     return 0
-}}"#
+}}
+
+function _cj_complete_cd() {{
+    local current target _cj_status candidate
+    local -a destinations
+    destinations=({destinations})
+
+    if [[ -n "${{BASH_VERSION-}}" ]]; then
+        current="${{COMP_WORDS[COMP_CWORD]}}"
+        if (( COMP_CWORD == 1 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
+            target="$(\command cj{config} --jump-worktree)"
+            _cj_status=$?
+            (( _cj_status == 0 )) || return "$_cj_status"
+            if [[ -z "$target" ]]; then
+                COMPREPLY=("$current")
+                compopt -o nospace 2>/dev/null || :
+                return 0
+            fi
+            COMPREPLY=("$target")
+            compopt -o filenames 2>/dev/null || :
+            return 0
+        fi
+
+        if declare -F _cd >/dev/null; then
+            _cd "$@"
+        else
+            COMPREPLY=()
+            while IFS= read -r candidate; do COMPREPLY+=("$candidate"); done < <(compgen -d -- "$current")
+        fi
+        for candidate in "${{destinations[@]}}"; do
+            [[ "$candidate" == "$current"* ]] && COMPREPLY+=("$candidate")
+        done
+        compopt -o filenames 2>/dev/null || :
+        return 0
+    fi
+
+    current="${{words[CURRENT]}}"
+    if (( CURRENT == 2 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
+        target="$(\command cj{config} --jump-worktree)"
+        _cj_status=$?
+        (( _cj_status == 0 )) || return "$_cj_status"
+        [[ -n "$target" ]] || return 1
+        compadd -f -- "$target"
+        return
+    fi
+
+    compadd -X 'cj destination' -- "${{destinations[@]}}"
+    "${{_cj_cd_completion_fallback:-_cd}}" "$@"
+}}
+
+if [[ -n "${{BASH_VERSION-}}" ]]; then
+    complete -F _cj_complete_cd cd
+elif (( $+functions[compdef] )); then
+    if [[ "${{_comps[cd]-}}" != _cj_complete_cd ]]; then
+        _cj_cd_completion_fallback="${{_comps[cd]-_cd}}"
+    fi
+    compdef _cj_complete_cd cd
+fi"#
     );
     Ok(match binding {
         Some(KeyBinding::CtrlO) => format!("{wrapper}\n\n{}", render_binding(shell, &config, true)),
@@ -311,18 +373,24 @@ export alias cd = __cj_cd"#
 fn render_powershell(
     config_path: Option<&Path>,
     binding: Option<KeyBinding>,
-    tickers: &Tickers,
+    settings: &Config,
 ) -> Result<String, String> {
     let config = config_path
         .map(absolute)
         .transpose()?
         .map(|path| format!("@('-C', {})", quote_powershell(&path.to_string_lossy())))
         .unwrap_or_else(|| "@()".into());
-    let navigate_up = quote_powershell(&tickers.navigate_up);
-    let navigate_down = quote_powershell(&tickers.navigate_down);
+    let navigate_up = quote_powershell(&settings.tickers.navigate_up);
+    let navigate_down = quote_powershell(&settings.tickers.navigate_down);
+    let destinations = crate::completions::destinations(settings)
+        .iter()
+        .map(|value| quote_powershell(value))
+        .collect::<Vec<_>>()
+        .join(", ");
     let wrapper = format!(
         r#"$script:__cj_executable = Get-Command cj -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $script:__cj_config = {config}
+$script:__cj_destinations = @({destinations})
 $global:__cj_down_route = $null
 $script:__cj_navigate_up = {navigate_up}
 $script:__cj_navigate_down = {navigate_down}
@@ -342,9 +410,46 @@ function script:Test-CjDescendant {{
     return -not [System.IO.Path]::IsPathRooted($relative) -and $relative -ne '..' -and -not $relative.StartsWith($parentPrefix, $script:__cj_path_comparison)
 }}
 
+function script:ConvertTo-CjCompletionText {{
+    param([string]$Value)
+    return "'" + $Value.Replace("'", "''") + "'"
+}}
+
+function script:Complete-CjCdArgument {{
+    param([string]$WordToComplete)
+
+    if (($WordToComplete -ceq '-jw') -or ($WordToComplete -ceq '--jump-worktree')) {{
+        $configArgs = $script:__cj_config
+        $executable = $script:__cj_executable.Path
+        $target = @(& $executable @configArgs --jump-worktree)
+        if (($LASTEXITCODE -eq 0) -and ($target.Count -eq 1) -and -not [string]::IsNullOrEmpty($target[0])) {{
+            $completion = ConvertTo-CjCompletionText $target[0]
+            [System.Management.Automation.CompletionResult]::new($completion, $target[0], 'ProviderContainer', $target[0])
+        }}
+        return
+    }}
+
+    foreach ($destination in $script:__cj_destinations) {{
+        if ($destination.StartsWith($WordToComplete, [System.StringComparison]::OrdinalIgnoreCase)) {{
+            $completion = ConvertTo-CjCompletionText $destination
+            [System.Management.Automation.CompletionResult]::new($completion, $destination, 'ParameterValue', 'cj destination')
+        }}
+    }}
+    [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
+        Where-Object ResultType -eq ([System.Management.Automation.CompletionResultType]::ProviderContainer)
+}}
+
 Remove-Item Alias:cd -Force -ErrorAction SilentlyContinue
 function global:cd {{
-    $cjArgs = @($args)
+    param(
+        [ArgumentCompleter({{
+            param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+            Complete-CjCdArgument $wordToComplete
+        }})]
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$CjArgument
+    )
+    $cjArgs = @($CjArgument)
     if ($cjArgs.Count -eq 0) {{
         Microsoft.PowerShell.Management\Set-Location -LiteralPath $HOME -ErrorAction Stop
         $global:__cj_down_route = $null
@@ -545,6 +650,31 @@ mod tests {
         assert!(powershell.contains("($first -ceq '--jump-worktree')"));
         assert!(powershell.contains("[string[]]$invokeArgs"));
         assert!(!powershell.contains("pick-worktree"));
+    }
+
+    #[test]
+    fn renders_jump_worktree_completion_hooks() {
+        let bash = render(Shell::Bash, None, None, &Config::default()).unwrap();
+        assert!(bash.contains("(( COMP_CWORD == 1 ))"));
+        assert!(bash.contains("complete -F _cj_complete_cd cd"));
+        assert!(bash.contains("\\command cj --jump-worktree"));
+        assert!(bash.contains("declare -F _cd"));
+
+        let zsh = render(Shell::Zsh, None, None, &Config::default()).unwrap();
+        assert!(zsh.contains("(( CURRENT == 2 ))"));
+        assert!(zsh.contains("compadd -f -- \"$target\""));
+        assert!(zsh.contains("_cj_cd_completion_fallback"));
+        assert!(zsh.contains("compdef _cj_complete_cd cd"));
+
+        let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
+        assert!(powershell.contains("function script:Complete-CjCdArgument"));
+        assert!(powershell.contains("[ArgumentCompleter({"));
+        assert!(powershell.contains("ValueFromRemainingArguments = $true"));
+        assert!(powershell.contains("CompletionCompleters]::CompleteFilename"));
+        assert!(!powershell.contains("Set-PSReadLineKeyHandler -Key Tab"));
+
+        let nu = render(Shell::Nu, None, None, &Config::default()).unwrap();
+        assert!(!nu.contains("executehostcommand"));
     }
 
     #[test]
