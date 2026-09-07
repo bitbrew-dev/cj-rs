@@ -293,14 +293,10 @@ fn generated_wrappers_jump_to_the_selected_worktree() {
 }
 
 #[test]
-fn generated_posix_tab_completion_selects_worktrees_without_changing_directory() {
-    let fixture = PickerFixture::new("fzf-tab-completion-雪");
-    let ordinary = fixture.git.main_nested.join("ordinary directory");
-    fs::create_dir(&ordinary).expect("create ordinary completion directory");
-    let binary_dir = fixture.git.temp.path().join("completion binary dir");
-    fs::create_dir_all(&binary_dir).expect("create binary directory");
-    symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
-    let mut paths = vec![binary_dir];
+fn generated_posix_tab_completion_offers_native_worktree_candidates() {
+    let fixture = PickerFixture::new("native-tab-completion-雪");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cj"));
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
     paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
     let path = env::join_paths(paths).expect("join PATH");
     let mut exercised = 0;
@@ -314,7 +310,14 @@ fn generated_posix_tab_completion_selects_worktrees_without_changing_directory()
             .expect("render shell setup");
         assert_success(&init);
 
-        for flag in ["-jw", "--jump-worktree"] {
+        for (flag, fzf) in [
+            ("-jw", fixture.git.temp.path().join("fake bin's dir/fzf")),
+            (
+                "--jump-worktree",
+                fixture.git.temp.path().join("missing-fzf"),
+            ),
+        ] {
+            write_config(&fixture.config, Path::new("/missing/zoxide"), &fzf);
             let script = if shell == "bash" {
                 concat!(
                     "eval \"$1\"; COMP_WORDS=(cd \"$2\"); COMP_CWORD=1; ",
@@ -324,8 +327,9 @@ fn generated_posix_tab_completion_selects_worktrees_without_changing_directory()
             } else {
                 concat!(
                     "eval \"$1\"; typeset -ga words; words=(cd \"$2\"); integer CURRENT=2; ",
-                    "compadd() { while (( $# )); do case \"$1\" in -f|--) shift ;; ",
-                    "*) printf '%s\\000' \"$1\"; shift ;; esac; done; }; ",
+                    "compadd() { local emit=; for value in \"$@\"; do ",
+                    "if [[ -n \"$emit\" ]]; then printf '%s\\000' \"$value\"; ",
+                    "elif [[ \"$value\" == -- ]]; then emit=1; fi; done; }; ",
                     "_cj_complete_cd; printf '%s\\000' \"${words[CURRENT]}\" \"$PWD\""
                 )
             };
@@ -333,11 +337,7 @@ fn generated_posix_tab_completion_selects_worktrees_without_changing_directory()
             command
                 .arg(flag)
                 .current_dir(&fixture.git.main_nested)
-                .env("PATH", &path)
-                .env("CJ_FAKE_ARGS", &fixture.args)
-                .env("CJ_FAKE_STDIN", &fixture.stdin)
-                .env("CJ_FAKE_MODE", "success")
-                .env("CJ_FAKE_SELECTION", "1");
+                .env("PATH", &path);
             let output = match command.output() {
                 Ok(output) => output,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -345,87 +345,49 @@ fn generated_posix_tab_completion_selects_worktrees_without_changing_directory()
             };
             exercised += 1;
             assert_success(&output);
-            assert!(output.stderr.is_empty());
             let fields = nul_strings(&output.stdout);
-            assert_eq!(fields[0], fixture.git.linked.to_str().unwrap());
-            assert_eq!(fields[1], flag);
-            assert_eq!(fields[2], fixture.git.main_nested.to_str().unwrap());
+            assert_eq!(fields.len(), 4);
+            assert!(fields[..2].contains(&fixture.git.main.to_str().unwrap()));
+            assert!(fields[..2].contains(&fixture.git.linked.to_str().unwrap()));
+            assert_eq!(fields[2], flag);
+            assert_eq!(fields[3], fixture.git.main_nested.to_str().unwrap());
         }
 
         let script = if shell == "bash" {
             concat!(
-                "eval \"$1\"; COMP_WORDS=(cd -jw); COMP_CWORD=1; ",
-                "_cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\" ",
-                "\"${COMP_WORDS[COMP_CWORD]}\" \"$PWD\""
+                "eval \"$1\"; _cd() { COMPREPLY=(native-fallback); }; ",
+                "for value in ordinary -j; do COMP_WORDS=(cd \"$value\"); COMP_CWORD=1; ",
+                "COMPREPLY=(); _cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\"; done; ",
+                "printf '%s\\000' \"$PWD\""
             )
         } else {
             concat!(
-                "eval \"$1\"; typeset -ga words; words=(cd -jw); integer CURRENT=2; ",
-                "compadd() { return 99; }; _cj_complete_cd || :; ",
-                "printf '%s\\000' \"${words[CURRENT]}\" \"$PWD\""
+                "eval \"$1\"; _cd() { printf 'native-fallback\\000'; }; ",
+                "compadd() { :; }; for value in ordinary -j; do ",
+                "typeset -ga words; words=(cd \"$value\"); integer CURRENT=2; ",
+                "_cj_complete_cd; done; printf '%s\\000' \"$PWD\""
             )
         };
-        let mut cancelled = shell_with_setup(shell, &init.stdout, script);
-        cancelled
+        let mut fallback = shell_with_setup(shell, &init.stdout, script);
+        fallback
             .current_dir(&fixture.git.main_nested)
-            .env("PATH", &path)
-            .env("CJ_FAKE_ARGS", &fixture.args)
-            .env("CJ_FAKE_STDIN", &fixture.stdin)
-            .env("CJ_FAKE_MODE", "cancel");
-        let cancelled = match cancelled.output() {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("cannot run {shell}: {error}"),
-        };
-        assert_success(&cancelled);
-        assert!(cancelled.stderr.is_empty());
-        let fields = nul_strings(&cancelled.stdout);
-        assert_eq!(fields[fields.len() - 2], "-jw");
+            .env("PATH", &path);
+        let fallback = fallback.output().expect("run native cd completion");
+        assert_success(&fallback);
         assert_eq!(
-            fields[fields.len() - 1],
-            fixture.git.main_nested.to_str().unwrap()
+            nul_strings(&fallback.stdout),
+            [
+                "native-fallback",
+                "native-fallback",
+                fixture.git.main_nested.to_str().unwrap()
+            ]
         );
-
-        if shell == "bash" {
-            let mut ordinary = shell_with_setup(
-                shell,
-                &init.stdout,
-                concat!(
-                    "eval \"$1\"; COMP_WORDS=(cd ordinary); COMP_CWORD=1; ",
-                    "_cj_complete_cd; printf '%s\\000' \"${COMPREPLY[@]}\" \"$PWD\""
-                ),
-            );
-            ordinary
-                .current_dir(&fixture.git.main_nested)
-                .env("PATH", &path);
-            let ordinary = ordinary.output().expect("run Bash directory completion");
-            assert_success(&ordinary);
-            assert!(nul_strings(&ordinary.stdout).contains(&"ordinary directory"));
-        } else {
-            let mut ordinary = shell_with_setup(
-                shell,
-                &init.stdout,
-                concat!(
-                    "eval \"$1\"; typeset -ga words; words=(cd ordinary); integer CURRENT=2; ",
-                    "compadd() { :; }; _cd() { printf 'native-directory-completion\\000'; }; ",
-                    "_cj_complete_cd; printf '%s\\000' \"$PWD\""
-                ),
-            );
-            ordinary
-                .current_dir(&fixture.git.main_nested)
-                .env("PATH", &path);
-            let ordinary = ordinary.output().expect("run Zsh directory completion");
-            assert_success(&ordinary);
-            assert_eq!(
-                nul_strings(&ordinary.stdout),
-                [
-                    "native-directory-completion",
-                    fixture.git.main_nested.to_str().unwrap()
-                ]
-            );
-        }
     }
     assert!(exercised > 0, "neither bash nor zsh is available");
+    assert!(
+        !fixture.args.exists() && !fixture.stdin.exists(),
+        "completion invoked fzf"
+    );
 }
 
 #[test]

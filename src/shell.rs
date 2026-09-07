@@ -144,22 +144,17 @@ function cd() {{
 }}
 
 function _cj_complete_cd() {{
-    local current target _cj_status candidate
-    local -a destinations
+    local current candidate
+    local -a destinations candidates
     destinations=({destinations})
 
     if [[ -n "${{BASH_VERSION-}}" ]]; then
         current="${{COMP_WORDS[COMP_CWORD]}}"
         if (( COMP_CWORD == 1 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
-            target="$(\command cj{config} --jump-worktree)"
-            _cj_status=$?
-            (( _cj_status == 0 )) || return "$_cj_status"
-            if [[ -z "$target" ]]; then
-                COMPREPLY=("$current")
-                compopt -o nospace 2>/dev/null || :
-                return 0
-            fi
-            COMPREPLY=("$target")
+            COMPREPLY=()
+            while IFS= read -r -d '' candidate; do
+                COMPREPLY+=("$candidate")
+            done < <(\command cj{config} --worktree-paths0 2>/dev/null)
             compopt -o filenames 2>/dev/null || :
             return 0
         fi
@@ -179,11 +174,12 @@ function _cj_complete_cd() {{
 
     current="${{words[CURRENT]}}"
     if (( CURRENT == 2 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
-        target="$(\command cj{config} --jump-worktree)"
-        _cj_status=$?
-        (( _cj_status == 0 )) || return "$_cj_status"
-        [[ -n "$target" ]] || return 1
-        compadd -f -- "$target"
+        candidates=()
+        while IFS= read -r -d '' candidate; do
+            candidates+=("$candidate")
+        done < <(\command cj{config} --worktree-paths0 2>/dev/null)
+        (( ${{#candidates[@]}} )) || return 0
+        compadd -f -- "${{candidates[@]}}"
         return
     fi
 
@@ -191,13 +187,21 @@ function _cj_complete_cd() {{
     "${{_cj_cd_completion_fallback:-_cd}}" "$@"
 }}
 
-if [[ -n "${{BASH_VERSION-}}" ]]; then
-    complete -F _cj_complete_cd cd
-elif (( $+functions[compdef] )); then
+function _cj_register_cd_completion() {{
+    (( $+functions[compdef] )) || return 0
     if [[ "${{_comps[cd]-}}" != _cj_complete_cd ]]; then
         _cj_cd_completion_fallback="${{_comps[cd]-_cd}}"
+        compdef _cj_complete_cd cd
     fi
-    compdef _cj_complete_cd cd
+}}
+
+if [[ -n "${{BASH_VERSION-}}" ]]; then
+    complete -F _cj_complete_cd cd
+elif [[ -n "${{ZSH_VERSION-}}" ]]; then
+    autoload -Uz add-zsh-hook
+    add-zsh-hook -d precmd _cj_register_cd_completion 2>/dev/null || :
+    add-zsh-hook precmd _cj_register_cd_completion
+    _cj_register_cd_completion
 fi"#
     );
     Ok(match binding {
@@ -275,6 +279,16 @@ def _cj-is-repeated [value: string, ticker: string] {{
 
 def _cj-complete-cd [spans: list<string>] {{
     let current = ($spans | last)
+    if (($spans | length) == 2) and ($current in ['-jw' '--jump-worktree']) {{
+        let config = {config}
+        let result = (^cj ...$config --worktree --format json | complete)
+        if $result.exit_code != 0 {{ return [] }}
+        return (try {{
+            $result.stdout | from json | each {{ |row|
+                {{ value: $row.path, description: 'Git worktree' }}
+            }}
+        }} catch {{ [] }})
+    }}
     let configured = ([{destinations}] | where value starts-with $current)
     let directories = ($current | commandline complete --detailed --type directory | each {{ |entry|
         {{ value: $entry.value, description: 'directory' }}
@@ -421,10 +435,19 @@ function script:Complete-CjCdArgument {{
     if (($WordToComplete -ceq '-jw') -or ($WordToComplete -ceq '--jump-worktree')) {{
         $configArgs = $script:__cj_config
         $executable = $script:__cj_executable.Path
-        $target = @(& $executable @configArgs --jump-worktree)
-        if (($LASTEXITCODE -eq 0) -and ($target.Count -eq 1) -and -not [string]::IsNullOrEmpty($target[0])) {{
-            $completion = ConvertTo-CjCompletionText $target[0]
-            [System.Management.Automation.CompletionResult]::new($completion, $target[0], 'ProviderContainer', $target[0])
+        $json = @(& $executable @configArgs --worktree --format json 2>$null)
+        if ($LASTEXITCODE -ne 0) {{ return }}
+        try {{
+            $worktrees = ($json -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop
+        }} catch {{
+            return
+        }}
+        foreach ($worktree in @($worktrees)) {{
+            $path = [string]$worktree.path
+            if (-not [string]::IsNullOrEmpty($path)) {{
+                $completion = ConvertTo-CjCompletionText $path
+                [System.Management.Automation.CompletionResult]::new($completion, $path, 'ProviderContainer', $path)
+            }}
         }}
         return
     }}
@@ -536,7 +559,7 @@ if (Test-Path Function:TabExpansion2) {{
             if ($jump.Success) {{
                 $matches = @(Complete-CjCdArgument $jump.Groups['flag'].Value)
                 $results = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
-                if ($matches.Count -eq 1) {{ [void]$results.Add($matches[0]) }}
+                foreach ($match in $matches) {{ [void]$results.Add($match) }}
                 return [System.Management.Automation.CommandCompletion]::new(
                     $results,
                     -1,
@@ -690,24 +713,28 @@ mod tests {
         let bash = render(Shell::Bash, None, None, &Config::default()).unwrap();
         assert!(bash.contains("(( COMP_CWORD == 1 ))"));
         assert!(bash.contains("complete -F _cj_complete_cd cd"));
-        assert!(bash.contains("\\command cj --jump-worktree"));
+        assert!(bash.contains("\\command cj --worktree-paths0"));
         assert!(bash.contains("declare -F _cd"));
 
         let zsh = render(Shell::Zsh, None, None, &Config::default()).unwrap();
         assert!(zsh.contains("(( CURRENT == 2 ))"));
-        assert!(zsh.contains("compadd -f -- \"$target\""));
+        assert!(zsh.contains("compadd -f -- \"${candidates[@]}\""));
         assert!(zsh.contains("_cj_cd_completion_fallback"));
         assert!(zsh.contains("compdef _cj_complete_cd cd"));
+        assert!(zsh.contains("add-zsh-hook precmd _cj_register_cd_completion"));
 
         let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
         assert!(powershell.contains("function script:Complete-CjCdArgument"));
+        assert!(powershell.contains("--worktree --format json"));
         assert!(powershell.contains("$cjArgs = @($args)"));
         assert!(powershell.contains("function global:TabExpansion2"));
+        assert!(powershell.contains("foreach ($match in $matches)"));
         assert!(powershell.contains("$script:__cj_tab_expansion2 @PSBoundParameters"));
         assert!(powershell.contains("CompletionCompleters]::CompleteFilename"));
         assert!(!powershell.contains("Set-PSReadLineKeyHandler -Key Tab"));
 
         let nu = render(Shell::Nu, None, None, &Config::default()).unwrap();
+        assert!(nu.contains("--worktree --format json"));
         assert!(!nu.contains("executehostcommand"));
     }
 

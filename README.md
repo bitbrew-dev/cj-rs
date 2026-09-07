@@ -150,16 +150,18 @@ Jump to a worktree interactively with fzf:
 cj -jw                 # print the selected worktree path
 cj --jump-worktree     # long form of the same command
 cd -jw                 # select a worktree and change directory
-cd -jw<Tab>            # select a worktree and insert its path, then press Enter
+cd -jw<Tab>            # complete a worktree path, then press Enter
 ```
 
 `-w/--worktree` only lists worktrees; `-jw/--jump-worktree` selects exactly one.
 The `cd` form requires the generated shell integration so the parent shell can
-perform the directory change. In Bash, Zsh, and PowerShell, with the cursor
-immediately after `-jw` or `--jump-worktree`, Tab opens the same picker and
-replaces that token with the selected path. Cancelling keeps the command line and
-current directory unchanged. Nushell keeps the Enter-based jump because its
-background completion model cannot safely run an interactive fzf picker.
+perform the directory change. In Bash, Zsh, Nushell, and PowerShell, pressing Tab
+immediately after `-jw` or `--jump-worktree` offers only this repository's
+worktree paths through the shell's native completion system. A completion frontend
+such as fzf-tab may render those candidates with fzf, but cj does not launch a
+nested picker during completion and works without fzf. Choosing a candidate only
+inserts its path; press Enter to change directory. Running `cd -jw` directly
+remains the explicit interactive fzf picker.
 
 To install an fzf worktree jump key together with the `cd` wrapper, add the setup
 flag to shell initialization:
