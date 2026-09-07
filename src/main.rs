@@ -20,6 +20,7 @@ struct Execution {
     stdout: Vec<u8>,
     stderr: String,
     write_stdout: bool,
+    trailing_newline: bool,
 }
 
 impl Execution {
@@ -28,6 +29,16 @@ impl Execution {
             stdout: stdout.into_bytes(),
             stderr: String::new(),
             write_stdout: true,
+            trailing_newline: true,
+        }
+    }
+
+    fn raw(stdout: Vec<u8>) -> Self {
+        Self {
+            stdout,
+            stderr: String::new(),
+            write_stdout: true,
+            trailing_newline: false,
         }
     }
 
@@ -36,6 +47,7 @@ impl Execution {
             stdout: Vec::new(),
             stderr: String::new(),
             write_stdout: false,
+            trailing_newline: false,
         }
     }
 
@@ -44,7 +56,16 @@ impl Execution {
             stdout: path_bytes::output_bytes(&path)?.into_owned(),
             stderr: String::new(),
             write_stdout: true,
+            trailing_newline: true,
         })
+    }
+
+    fn write_to(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        writer.write_all(&self.stdout)?;
+        if self.trailing_newline {
+            writer.write_all(b"\n")?;
+        }
+        Ok(())
     }
 }
 
@@ -112,6 +133,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 .map(Execution::path)
                 .unwrap_or_else(|| Ok(Execution::stdout(String::new())))
         }
+        Command::WorktreePaths0 => worktree::paths0(&worktree::list()?).map(Execution::raw),
         Command::MountsScan { format } => {
             let context = mounts::DiscoveryContext::from_process()?;
             let report = mounts::scan(&context);
@@ -123,6 +145,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 stdout: rendered.stdout.into_bytes(),
                 stderr: rendered.stderr,
                 write_stdout: true,
+                trailing_newline: true,
             })
         }
         Command::ConfigInit { preamp } => {
@@ -143,6 +166,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 stdout: format!("created {}", path.display()).into_bytes(),
                 stderr,
                 write_stdout: true,
+                trailing_newline: true,
             })
         }
     }
@@ -156,9 +180,7 @@ fn main() -> ExitCode {
             }
             let result = if output.write_stdout {
                 let mut stdout = std::io::stdout().lock();
-                stdout
-                    .write_all(&output.stdout)
-                    .and_then(|()| stdout.write_all(b"\n"))
+                output.write_to(&mut stdout)
             } else {
                 Ok(())
             };
@@ -174,5 +196,19 @@ fn main() -> ExitCode {
             eprintln!("cj: {error}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Execution;
+
+    #[test]
+    fn raw_execution_does_not_append_a_line_feed() {
+        let mut output = Vec::new();
+        Execution::raw(b"first\0second\0".to_vec())
+            .write_to(&mut output)
+            .unwrap();
+        assert_eq!(output, b"first\0second\0");
     }
 }

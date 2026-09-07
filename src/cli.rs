@@ -49,6 +49,7 @@ pub enum Command {
         relative: bool,
         jump: bool,
     },
+    WorktreePaths0,
     Init {
         shell: Shell,
         setup_key_binding: bool,
@@ -103,6 +104,7 @@ impl Cli {
         let mut format = None;
         let mut relative = false;
         let mut jump = false;
+        let mut worktree_paths0 = false;
         let mut setup_key_binding = false;
         let mut output = None;
         let mut preamp = false;
@@ -148,6 +150,8 @@ impl Cli {
             } else if options && matches!(text, Some("-jw" | "--jump-worktree")) {
                 worktree = true;
                 jump = true;
+            } else if options && text == Some("--worktree-paths0") {
+                worktree_paths0 = true;
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
             } else if options && matches!(text, Some("-o" | "--output")) {
@@ -163,7 +167,20 @@ impl Cli {
             }
         }
 
-        let command = if !force_resolve
+        let command = if worktree_paths0 {
+            if force_resolve
+                || !targets.is_empty()
+                || worktree
+                || format.is_some()
+                || relative
+                || resolver != ResolverOverride::Configured
+                || setup_key_binding
+                || preamp
+            {
+                return Err("--worktree-paths0 cannot be combined with another mode".into());
+            }
+            Command::WorktreePaths0
+        } else if !force_resolve
             && resolver == ResolverOverride::Configured
             && targets.first().and_then(|arg| arg.to_str()) == Some("config")
         {
@@ -490,6 +507,23 @@ mod tests {
         assert!(Cli::parse(["-j"].map(Into::into)).is_err());
         assert!(Cli::parse(["-jwx"].map(Into::into)).is_err());
         assert!(Cli::parse(["--pick-worktree"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn parses_hidden_worktree_path_protocol_exactly() {
+        assert_eq!(
+            Cli::parse(["--worktree-paths0"].map(Into::into)),
+            Ok(Cli {
+                config_path: None,
+                verbose: false,
+                command: Command::WorktreePaths0,
+            })
+        );
+        assert!(!HELP.contains("--worktree-paths0"));
+        assert!(Cli::parse(["--worktree-paths"].map(Into::into)).is_err());
+        assert!(Cli::parse(["--worktree-paths0", "-w"].map(Into::into)).is_err());
+        assert!(Cli::parse(["--worktree-paths0", "target"].map(Into::into)).is_err());
+        assert!(Cli::parse(["--worktree-paths0", "--"].map(Into::into)).is_err());
     }
 
     #[test]

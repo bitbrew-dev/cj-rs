@@ -141,10 +141,8 @@ fn powershell_wrapper_jumps_to_the_selected_worktree() {
 }
 
 #[test]
-fn powershell_tab_completion_selects_and_quotes_worktrees_without_changing_directory() {
+fn powershell_tab_completion_offers_native_worktree_candidates() {
     let git = GitFixture::new("windows-tab-completion-雪");
-    let ordinary = git.main_nested.join("ordinary completion directory");
-    fs::create_dir(&ordinary).expect("create ordinary completion directory");
     let tool = copy_tool(git.temp.path(), "fzf.exe");
     let config = git.temp.path().join("fzf completion config.toml");
     let source = git.temp.path().join("cj completion.ps1");
@@ -161,27 +159,29 @@ fn powershell_tab_completion_selects_and_quotes_worktrees_without_changing_direc
     fs::write(&source, init.stdout).expect("write PowerShell integration");
 
     let script = r#"$ErrorActionPreference = 'Stop'
-. $env:CJ_SOURCE
-$before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
-$expected = $env:CJ_EXPECTED
+function global:TabExpansion2 {
+    param([string]$inputScript, [int]$cursorColumn = $inputScript.Length, [hashtable]$options = $null); $global:CJ_DELEGATED += 1
+    $items = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new(); [void]$items.Add([System.Management.Automation.CompletionResult]::new('native-fallback', 'native-fallback', 'ProviderContainer', 'native-fallback')); [System.Management.Automation.CommandCompletion]::new($items, -1, 0, 0)
+}
+$global:CJ_DELEGATED = 0; . $env:CJ_SOURCE
+$before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath; $expected = @($env:CJ_MAIN, $env:CJ_LINKED)
 foreach ($flag in @('-jw', '--jump-worktree')) {
     $matches = @(Complete-CjCdArgument $flag)
-    if ($matches.Count -ne 1) { throw "expected one completion for $flag, got $($matches.Count)" }
-    $selected = $matches[0].ListItemText
-    if (-not [System.IO.Path]::GetFullPath($selected).Equals([System.IO.Path]::GetFullPath($expected), [System.StringComparison]::OrdinalIgnoreCase)) { throw "completion selected the wrong path: $selected" }
-    $quoted = "'" + $selected.Replace("'", "''") + "'"
-    if ($matches[0].CompletionText -cne $quoted) { throw "completion is not safely quoted: $($matches[0].CompletionText)" }
-    $line = "cd $flag"
-    $wired = @(TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches
-    if ($wired.Count -ne 1 -or -not [System.IO.Path]::GetFullPath($wired[0].ListItemText).Equals([System.IO.Path]::GetFullPath($expected), [System.StringComparison]::OrdinalIgnoreCase)) { throw "cd argument completer is not wired for $flag" }
+    if ($matches.Count -ne 2) { throw "expected two completions for $flag, got $($matches.Count)" }
+    foreach ($match in $matches) {
+        $selected = $match.ListItemText; if (-not ($expected | Where-Object { [System.IO.Path]::GetFullPath($_).Equals([System.IO.Path]::GetFullPath($selected), [System.StringComparison]::OrdinalIgnoreCase) })) { throw "unexpected worktree: $selected" }
+        $quoted = "'" + $selected.Replace("'", "''") + "'"; if ($match.CompletionText -cne $quoted) { throw "completion is not safely quoted: $($match.CompletionText)" }
+    }
+    $line = "cd $flag"; $completion = TabExpansion2 -inputScript $line -cursorColumn $line.Length
+    if ($completion.CompletionMatches.Count -ne 2) { throw "cd completion is not wired for $flag" }
+    if (($completion.ReplacementIndex -ne 3) -or ($completion.ReplacementLength -ne $flag.Length)) { throw "wrong replacement span for $flag" }
     if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'completion changed directory' }
 }
-$env:CJ_FAKE_MODE = 'cancel'
-$cancelled = @(Complete-CjCdArgument '-jw')
-if ($cancelled.Count -ne 0) { throw 'cancellation replaced the command token' }
-if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'cancellation changed directory' }
-$directories = @(Complete-CjCdArgument 'ordinary')
-if (-not ($directories | Where-Object { $_.ListItemText -like '*ordinary completion directory*' })) { throw 'normal directory completion was not preserved' }
+foreach ($line in @('cd ordinary', 'cd -j')) {
+    $delegated = TabExpansion2 -inputScript $line -cursorColumn $line.Length; if ($delegated.CompletionMatches[0].ListItemText -cne 'native-fallback') { throw "ordinary completion was not delegated: $line" }
+}
+if ($global:CJ_DELEGATED -ne 2) { throw 'saved TabExpansion2 was not called twice' }
+if ((Microsoft.PowerShell.Management\Get-Location).ProviderPath -cne $before) { throw 'completion changed directory' }
 [Console]::Out.Write('ok')
 "#;
     let output = Command::new("pwsh")
@@ -194,10 +194,8 @@ if (-not ($directories | Where-Object { $_.ListItemText -like '*ordinary complet
         ])
         .current_dir(&git.main_nested)
         .env("CJ_SOURCE", source)
-        .env("CJ_EXPECTED", &git.linked)
-        .env("CJ_FAKE_TOOL", "fzf")
-        .env("CJ_FAKE_MODE", "success")
-        .env("CJ_FAKE_SELECTION", "1")
+        .env("CJ_MAIN", &git.main)
+        .env("CJ_LINKED", &git.linked)
         .env("CJ_FAKE_ARGS", args)
         .env("CJ_FAKE_STDIN", stdin)
         .env("PATH", path_with_cj())
@@ -208,7 +206,10 @@ if (-not ($directories | Where-Object { $_.ListItemText -like '*ordinary complet
         .expect("run PowerShell completion");
     assert_success(&output);
     assert_eq!(output.stdout, b"ok");
-    assert!(output.stderr.is_empty());
+    assert!(
+        !git.temp.path().join("fzf completion args").exists()
+            && !git.temp.path().join("fzf completion stdin").exists()
+    );
 }
 
 struct ToolFixture {

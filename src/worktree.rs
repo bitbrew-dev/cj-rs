@@ -53,6 +53,15 @@ pub fn render(
     }
 }
 
+pub fn paths0(worktrees: &[Worktree]) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    for worktree in worktrees {
+        output.extend_from_slice(path_bytes::output_bytes(&worktree.path)?.as_ref());
+        output.push(0);
+    }
+    Ok(output)
+}
+
 pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, String> {
     let mut input = Vec::new();
     for (index, worktree) in worktrees.iter().enumerate() {
@@ -402,6 +411,23 @@ mod tests {
     }
 
     #[test]
+    fn renders_nul_terminated_worktree_paths() {
+        assert_eq!(
+            paths0(&parse(PORCELAIN).unwrap()).unwrap(),
+            b"/repo\0/repo/feature\0"
+        );
+    }
+
+    #[test]
+    fn path_protocol_preserves_embedded_text_delimiters() {
+        let porcelain = b"worktree /repo/line\nwith\ttab and 'quote'\0HEAD 0123456789abcdef\0\0";
+        assert_eq!(
+            paths0(&parse(porcelain).unwrap()).unwrap(),
+            b"/repo/line\nwith\ttab and 'quote'\0"
+        );
+    }
+
+    #[test]
     fn identical_path_is_dot() {
         assert_eq!(
             relative_path(Path::new("/repo"), Path::new("/repo")),
@@ -437,6 +463,7 @@ mod tests {
                 .as_bytes(),
             b"/repo/invalid-\xff"
         );
+        assert_eq!(paths0(&worktrees).unwrap(), b"/repo/invalid-\xff\0");
         assert_eq!(
             render(&worktrees, OutputFormat::Table, false, Path::new("/repo")).unwrap_err(),
             "cannot render a non-UTF-8 worktree path as a table"
