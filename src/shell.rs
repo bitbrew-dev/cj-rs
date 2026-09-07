@@ -441,15 +441,7 @@ function script:Complete-CjCdArgument {{
 
 Remove-Item Alias:cd -Force -ErrorAction SilentlyContinue
 function global:cd {{
-    param(
-        [ArgumentCompleter({{
-            param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
-            Complete-CjCdArgument $wordToComplete
-        }})]
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$CjArgument
-    )
-    $cjArgs = @($CjArgument)
+    $cjArgs = @($args)
     if ($cjArgs.Count -eq 0) {{
         Microsoft.PowerShell.Management\Set-Location -LiteralPath $HOME -ErrorAction Stop
         $global:__cj_down_route = $null
@@ -514,6 +506,11 @@ function global:cd {{
     }} else {{
         $global:__cj_down_route = $null
     }}
+}}
+
+Register-ArgumentCompleter -Native -CommandName cd -ScriptBlock {{
+    param($wordToComplete, $commandAst, $cursorPosition)
+    Complete-CjCdArgument $wordToComplete
 }}"#
     );
     Ok(match binding {
@@ -668,8 +665,10 @@ mod tests {
 
         let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
         assert!(powershell.contains("function script:Complete-CjCdArgument"));
-        assert!(powershell.contains("[ArgumentCompleter({"));
-        assert!(powershell.contains("ValueFromRemainingArguments = $true"));
+        assert!(powershell.contains("$cjArgs = @($args)"));
+        assert!(
+            powershell.contains("Register-ArgumentCompleter -Native -CommandName cd -ScriptBlock")
+        );
         assert!(powershell.contains("CompletionCompleters]::CompleteFilename"));
         assert!(!powershell.contains("Set-PSReadLineKeyHandler -Key Tab"));
 
