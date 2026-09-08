@@ -1,5 +1,5 @@
 # Consilium Configuration Schema
-#:schema https://raw.githubusercontent.com/benbenbang/polyconf/refs/tags/0.1.0/src/polyconf/schemas/consilium/csl-config.schema.json
+#:schema https://raw.githubusercontent.com/benbenbang/polyconf/refs/tags/0.4.0/src/schemas/consilium/csl-config.schema.json
 # Complete reference showing all available configuration options
 # Uncomment and modify options as needed for your project
 
@@ -420,3 +420,9 @@ model = "gpt-5.6-sol"
 # Warnings vs Errors:
 # - Warning (continue): Conflicts, missing patterns, env var not found
 # - Error (stop): Invalid syntax, can't compile regex, missing required fields
+
+[pr]
+merge = "squash"
+
+[hint]
+program = "url"
