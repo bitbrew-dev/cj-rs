@@ -112,7 +112,9 @@ impl FzfAlias {
             let id = NEXT.fetch_add(1, Ordering::Relaxed);
             let directory =
                 std::env::temp_dir().join(format!("cj-fzf-{}-{id}", std::process::id()));
-            let mut builder = std::fs::DirBuilder::new();
+            let builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            let mut builder = builder;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;

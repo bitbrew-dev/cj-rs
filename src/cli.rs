@@ -345,11 +345,6 @@ fn parse_init(
         );
     }
     let shell = parse_shell(&targets[1])?;
-    if options.setup_key_binding && shell == Shell::Nu {
-        return Err(
-            "--setup-key-binding is currently supported for bash, zsh, and PowerShell".into(),
-        );
-    }
     Ok(Command::Init {
         shell,
         setup_key_binding: options.setup_key_binding,
@@ -692,7 +687,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_shell_setup_combinations() {
         assert!(Cli::parse(["init", "fish"].map(Into::into)).is_err());
-        assert!(Cli::parse(["init", "nu", "--setup-key-binding"].map(Into::into)).is_err());
+        assert!(Cli::parse(["init", "nu", "--setup-key-binding"].map(Into::into)).is_ok());
         assert_eq!(
             Cli::parse(["init", "powershell", "--setup-key-binding"].map(Into::into)),
             Ok(Cli {
