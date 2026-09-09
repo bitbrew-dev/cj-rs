@@ -118,6 +118,12 @@ mod tests {
         let original = fs::read(&destination).unwrap();
         let created: Config = toml::from_slice(&original).unwrap();
         assert_eq!(created.mounts["external-ssd"].path.as_ref(), Some(&mount));
+        assert_eq!(created.key_bindings, Config::default().key_bindings);
+        let serialized = String::from_utf8(original.clone()).unwrap();
+        for os in ["macos", "linux", "windows"] {
+            assert!(serialized.contains(&format!("[key-bindings.{os}]")));
+        }
+        assert_eq!(serialized.matches("behaviors = ").count(), 3);
 
         assert!(
             create(Some(&destination), [])

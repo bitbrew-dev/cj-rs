@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -42,9 +44,25 @@ pub struct Programs {
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyBindings {
-    pub macos: KeyBinding,
-    pub linux: KeyBinding,
-    pub windows: KeyBinding,
+    #[serde(deserialize_with = "deserialize_macos_binding")]
+    pub macos: BindingConfig,
+    #[serde(deserialize_with = "deserialize_linux_binding")]
+    pub linux: BindingConfig,
+    #[serde(deserialize_with = "deserialize_windows_binding")]
+    pub windows: BindingConfig,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct BindingConfig {
+    pub key: KeyBinding,
+    pub behaviors: Vec<KeyBindingBehavior>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyBindingBehavior {
+    Zoxide,
+    Cj,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -124,15 +142,31 @@ impl Config {
     }
 
     pub fn key_binding(&self) -> KeyBinding {
-        match env::consts::OS {
-            "macos" => self.key_bindings.macos,
-            "linux" => self.key_bindings.linux,
-            "windows" => self.key_bindings.windows,
-            _ => KeyBinding::None,
+        if self.key_binding_behaviors().is_empty() {
+            return KeyBinding::None;
         }
+        self.key_bindings
+            .for_os(env::consts::OS)
+            .map_or(KeyBinding::None, |binding| binding.key)
+    }
+
+    pub fn key_binding_behaviors(&self) -> &[KeyBindingBehavior] {
+        self.key_bindings
+            .for_os(env::consts::OS)
+            .filter(|binding| binding.key != KeyBinding::None)
+            .map_or(&[], |binding| binding.behaviors.as_slice())
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
+        for (os, binding) in [
+            ("macos", &self.key_bindings.macos),
+            ("linux", &self.key_bindings.linux),
+            ("windows", &self.key_bindings.windows),
+        ] {
+            binding
+                .validate()
+                .map_err(|error| format!("key-bindings.{os}: {error}"))?;
+        }
         validate_ticker("tickers.navigate_up", &self.tickers.navigate_up)?;
         validate_ticker("tickers.navigate_down", &self.tickers.navigate_down)?;
         if self.tickers.navigate_up == self.tickers.navigate_down {
@@ -203,11 +237,111 @@ impl Default for Programs {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
-            macos: KeyBinding::CtrlO,
-            linux: KeyBinding::AltO,
-            windows: KeyBinding::CtrlO,
+            macos: BindingConfig::from_key(KeyBinding::CtrlO),
+            linux: BindingConfig::from_key(KeyBinding::AltO),
+            windows: BindingConfig::from_key(KeyBinding::CtrlO),
         }
     }
+}
+
+impl KeyBindings {
+    fn for_os(&self, os: &str) -> Option<&BindingConfig> {
+        match os {
+            "macos" => Some(&self.macos),
+            "linux" => Some(&self.linux),
+            "windows" => Some(&self.windows),
+            _ => None,
+        }
+    }
+}
+
+impl BindingConfig {
+    fn from_key(key: KeyBinding) -> Self {
+        Self {
+            key,
+            behaviors: if key == KeyBinding::None {
+                vec![]
+            } else {
+                vec![KeyBindingBehavior::Zoxide, KeyBindingBehavior::Cj]
+            },
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (index, behavior) in self.behaviors.iter().enumerate() {
+            if self.behaviors[..index].contains(behavior) {
+                let name = match behavior {
+                    KeyBindingBehavior::Zoxide => "zoxide",
+                    KeyBindingBehavior::Cj => "cj",
+                };
+                return Err(format!(
+                    "behaviors contains duplicate {name:?}; use each behavior at most once"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_macos_binding<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BindingConfig, D::Error> {
+    deserialize_binding(deserializer, KeyBinding::CtrlO, "macos")
+}
+
+fn deserialize_linux_binding<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BindingConfig, D::Error> {
+    deserialize_binding(deserializer, KeyBinding::AltO, "linux")
+}
+
+fn deserialize_windows_binding<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BindingConfig, D::Error> {
+    deserialize_binding(deserializer, KeyBinding::CtrlO, "windows")
+}
+
+fn deserialize_binding<'de, D: Deserializer<'de>>(
+    deserializer: D,
+    default_key: KeyBinding,
+    os: &str,
+) -> Result<BindingConfig, D::Error> {
+    struct BindingVisitor(KeyBinding);
+
+    impl<'de> Visitor<'de> for BindingVisitor {
+        type Value = BindingConfig;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter
+                .write_str("a key string (ctrl-o, alt-o, none) or a table with key and behaviors")
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            KeyBinding::deserialize(de::value::StrDeserializer::<E>::new(value))
+                .map(BindingConfig::from_key)
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Fields {
+                key: Option<KeyBinding>,
+                behaviors: Option<Vec<KeyBindingBehavior>>,
+            }
+
+            let fields = Fields::deserialize(MapAccessDeserializer::new(map))?;
+            let mut binding = BindingConfig::from_key(fields.key.unwrap_or(self.0));
+            if let Some(behaviors) = fields.behaviors {
+                binding.behaviors = behaviors;
+            }
+            binding.validate().map_err(de::Error::custom)?;
+            Ok(binding)
+        }
+    }
+
+    deserializer
+        .deserialize_any(BindingVisitor(default_key))
+        .map_err(|error| de::Error::custom(format!("key-bindings.{os}: {error}")))
 }
 
 impl Default for Keywords {
@@ -345,9 +479,161 @@ mod tests {
         assert_eq!(config.behavior.default, DefaultResolver::Builtin);
         assert_eq!(config.programs.zoxide, Path::new("/opt/bin/zoxide"));
         assert_eq!(config.programs.fzf, Path::new("fzf"));
-        assert_eq!(config.key_bindings.macos, KeyBinding::CtrlO);
-        assert_eq!(config.key_bindings.windows, KeyBinding::CtrlO);
+        assert_eq!(config.key_bindings, KeyBindings::default());
         assert_eq!(config.tickers, Tickers::default());
+    }
+
+    #[test]
+    fn legacy_key_bindings_keep_default_behaviors_and_none_disables() {
+        let config: Config = toml::from_str(
+            r#"[key-bindings]
+macos = "alt-o"
+linux = "ctrl-o"
+windows = "none"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.key_bindings.macos,
+            BindingConfig::from_key(KeyBinding::AltO)
+        );
+        assert_eq!(
+            config.key_bindings.linux,
+            BindingConfig::from_key(KeyBinding::CtrlO)
+        );
+        assert_eq!(
+            config.key_bindings.windows,
+            BindingConfig::from_key(KeyBinding::None)
+        );
+        assert!(config.key_bindings.windows.behaviors.is_empty());
+        assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn structured_key_bindings_preserve_order_and_allow_single_or_empty_behaviors() {
+        for behaviors in [
+            vec![KeyBindingBehavior::Zoxide, KeyBindingBehavior::Cj],
+            vec![KeyBindingBehavior::Cj, KeyBindingBehavior::Zoxide],
+            vec![KeyBindingBehavior::Zoxide],
+            vec![KeyBindingBehavior::Cj],
+            vec![],
+        ] {
+            let names: Vec<_> = behaviors
+                .iter()
+                .map(|behavior| match behavior {
+                    KeyBindingBehavior::Zoxide => "\"zoxide\"",
+                    KeyBindingBehavior::Cj => "\"cj\"",
+                })
+                .collect();
+            let config: Config = toml::from_str(&format!(
+                "[key-bindings]\nmacos = {{ key = \"ctrl-o\", behaviors = [{}] }}\nlinux = {{ key = \"alt-o\", behaviors = [{}] }}\nwindows = {{ key = \"ctrl-o\", behaviors = [{}] }}\n",
+                names.join(", "), names.join(", "), names.join(", "),
+            ))
+            .unwrap();
+            for os in ["macos", "linux", "windows"] {
+                assert_eq!(config.key_bindings.for_os(os).unwrap().behaviors, behaviors);
+            }
+            assert_eq!(config.key_binding_behaviors(), behaviors);
+            assert_eq!(config.validate(), Ok(()));
+            if behaviors.is_empty() {
+                assert_eq!(config.key_binding(), KeyBinding::None);
+            }
+        }
+    }
+
+    #[test]
+    fn structured_binding_defaults_and_os_selection_are_deterministic() {
+        let config: Config = toml::from_str(
+            r#"[key-bindings]
+macos = {}
+linux = { behaviors = ["cj"] }
+windows = { key = "alt-o" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.key_bindings.for_os("macos"),
+            Some(&BindingConfig::from_key(KeyBinding::CtrlO))
+        );
+        assert_eq!(
+            config.key_bindings.for_os("linux"),
+            Some(&BindingConfig {
+                key: KeyBinding::AltO,
+                behaviors: vec![KeyBindingBehavior::Cj],
+            })
+        );
+        assert_eq!(
+            config.key_bindings.for_os("windows"),
+            Some(&BindingConfig::from_key(KeyBinding::AltO))
+        );
+        assert_eq!(config.key_bindings.for_os("freebsd"), None);
+
+        let defaults: Config = toml::from_str("[key-bindings]\nlinux = {}\n").unwrap();
+        assert_eq!(defaults.key_bindings, KeyBindings::default());
+    }
+
+    #[test]
+    fn invalid_bindings_report_os_and_actionable_reason() {
+        for os in ["macos", "linux", "windows"] {
+            for (value, reason) in [
+                (r#""ctrl-x""#, "expected one of `ctrl-o`, `alt-o`, `none`"),
+                (
+                    r#"{ key = "ctrl-x" }"#,
+                    "expected one of `ctrl-o`, `alt-o`, `none`",
+                ),
+                (r#"{ behaviors = ["auto"] }"#, "expected `zoxide` or `cj`"),
+                (r#"{ behaviors = ["cj", "cj"] }"#, "duplicate \"cj\""),
+                (
+                    r#"{ behaviors = ["zoxide", "zoxide"] }"#,
+                    "duplicate \"zoxide\"",
+                ),
+                (r#"{ behavior = ["cj"] }"#, "unknown field `behavior`"),
+                (r#"{ behaviors = "cj" }"#, "expected a sequence"),
+                ("42", "a key string"),
+            ] {
+                let error = toml::from_str::<Config>(&format!("[key-bindings]\n{os} = {value}\n"))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(&format!("key-bindings.{os}")), "{error}");
+                assert!(error.contains(reason), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_behaviors_on_any_os() {
+        for os in ["macos", "linux", "windows"] {
+            let mut config = Config::default();
+            let binding = match os {
+                "macos" => &mut config.key_bindings.macos,
+                "linux" => &mut config.key_bindings.linux,
+                _ => &mut config.key_bindings.windows,
+            };
+            binding.behaviors = vec![KeyBindingBehavior::Cj, KeyBindingBehavior::Cj];
+            let error = config.validate().unwrap_err();
+            assert!(error.contains(&format!("key-bindings.{os}")), "{error}");
+            assert!(error.contains("use each behavior at most once"), "{error}");
+        }
+    }
+
+    #[test]
+    fn serializes_bindings_canonically_and_round_trips_legacy_and_structured_forms() {
+        let config: Config = toml::from_str(
+            r#"[key-bindings]
+macos = "ctrl-o"
+linux = { key = "alt-o", behaviors = ["cj", "zoxide"] }
+windows = "none"
+"#,
+        )
+        .unwrap();
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert!(encoded.contains("[key-bindings.macos]\nkey = \"ctrl-o\"\nbehaviors = [\n    \"zoxide\",\n    \"cj\",\n]"), "{encoded}");
+        assert!(
+            encoded.contains("[key-bindings.windows]\nkey = \"none\"\nbehaviors = []"),
+            "{encoded}"
+        );
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, config);
     }
 
     #[test]
