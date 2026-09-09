@@ -144,24 +144,25 @@ cj -w --format json
 cj -w --relative
 ```
 
-Jump to a worktree interactively with fzf:
+Choose a worktree with Tab completion:
 
 ```console
-cj -jw                 # print the selected worktree path
-cj --jump-worktree     # long form of the same command
-cd -jw                 # select a worktree and change directory
 cd -jw<Tab>            # complete a worktree path, then press Enter
+cd --jump-worktree<Tab> # long form of the same completion trigger
 ```
 
-`-w/--worktree` only lists worktrees; `-jw/--jump-worktree` selects exactly one.
-The `cd` form requires the generated shell integration so the parent shell can
-perform the directory change. In Bash, Zsh, Nushell, and PowerShell, pressing Tab
+`cj -w/--worktree` lists worktrees. The `cd` completion requires the generated
+shell integration so the parent shell can perform the directory change.
+In Bash, Zsh, Nushell, and PowerShell, pressing Tab
 immediately after `-jw` or `--jump-worktree` offers only this repository's
 worktree paths through the shell's native completion system. A completion frontend
 such as fzf-tab may render those candidates with fzf, but cj does not launch a
 nested picker during completion and works without fzf. Choosing a candidate only
-inserts its path; press Enter to change directory. Running `cd -jw` directly
-remains the explicit interactive fzf picker.
+inserts its path; press Enter to change directory. Pressing Enter while the jump
+token is still present shows a reminder to use Tab and leaves the directory unchanged.
+
+The standalone `cj -jw` / `cj --jump-worktree` command remains available to print
+a path selected through fzf; it also powers the optional worktree key binding.
 
 To install an fzf worktree jump key together with the `cd` wrapper, add the setup
 flag to shell initialization:
@@ -172,8 +173,8 @@ eval "$(cj init zsh --setup-key-binding)"
 
 The default picker key is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and Windows, and
 <kbd>Alt</kbd>+<kbd>O</kbd> on Linux. Pressing it invokes the same interactive
-worktree jump as `cd -jw`. The jump requires `fzf`; ordinary directory jumps and
-worktree listing do not.
+worktree picker as `cj -jw` and changes directory to the selected path. The key
+binding requires `fzf`; ordinary directory jumps and worktree listing do not.
 
 ## Configuration
 

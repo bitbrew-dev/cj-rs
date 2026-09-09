@@ -225,8 +225,8 @@ fn fzf_cancellation_and_failure_are_controlled() {
 }
 
 #[test]
-fn generated_wrappers_jump_to_the_selected_worktree() {
-    let fixture = PickerFixture::new("fzf-shell-jump");
+fn generated_wrappers_require_tab_for_worktree_selection() {
+    let fixture = PickerFixture::new("worktree-tab-only");
     let binary_dir = fixture.git.temp.path().join("binary dir");
     fs::create_dir_all(&binary_dir).expect("create binary directory");
     symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
@@ -248,7 +248,7 @@ fn generated_wrappers_jump_to_the_selected_worktree() {
             let mut command = shell_with_setup(
                 shell,
                 &init.stdout,
-                "eval \"$1\"; cd \"$2\"; printf '%s\\n' \"$PWD\"",
+                "eval \"$1\"; cd \"$2\"; result=$?; printf '%s\\n' \"$PWD\"; exit \"$result\"",
             );
             command
                 .arg(flag)
@@ -264,32 +264,22 @@ fn generated_wrappers_jump_to_the_selected_worktree() {
                 Err(error) => panic!("cannot run {shell}: {error}"),
             };
             exercised += 1;
-            assert_success(&output);
-            assert_eq!(output.stdout, path_output(&fixture.git.linked));
-            assert!(output.stderr.is_empty());
+            assert!(
+                !output.status.success(),
+                "{shell} accepted {flag} without Tab"
+            );
+            assert_eq!(output.stdout, path_output(&fixture.git.main_nested));
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("type cd -jw and press Tab to select a worktree")
+            );
         }
-
-        let mut command = shell_with_setup(
-            shell,
-            &init.stdout,
-            "eval \"$1\"; cd -jw || :; printf '%s\\n' \"$PWD\"",
-        );
-        command
-            .current_dir(&fixture.git.main_nested)
-            .env("PATH", &path)
-            .env("CJ_FAKE_ARGS", &fixture.args)
-            .env("CJ_FAKE_STDIN", &fixture.stdin)
-            .env("CJ_FAKE_MODE", "cancel");
-        let output = match command.output() {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("cannot run {shell}: {error}"),
-        };
-        assert_success(&output);
-        assert_eq!(output.stdout, path_output(&fixture.git.main_nested));
-        assert!(output.stderr.is_empty());
     }
     assert!(exercised > 0, "neither bash nor zsh is available");
+    assert!(
+        !fixture.args.exists() && !fixture.stdin.exists(),
+        "executing the Tab token must not invoke fzf"
+    );
 }
 
 #[test]
