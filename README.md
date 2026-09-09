@@ -192,9 +192,9 @@ zoxide = "zoxide"
 fzf = "fzf"
 
 [key-bindings]
-macos = "ctrl-o"
-linux = "alt-o"
-windows = "ctrl-o"
+macos = { key = "ctrl-o", behaviors = ["zoxide", "cj"] }
+linux = { key = "alt-o", behaviors = ["zoxide", "cj"] }
+windows = { key = "ctrl-o", behaviors = ["zoxide", "cj"] }
 
 [keywords]
 top = ["top"]
@@ -216,7 +216,15 @@ onedrive-work = { provider = "onedrive", account = "business" }
 ```
 
 Program values may be executable names found on `PATH` or explicit executable
-paths. Key bindings accept `ctrl-o`, `alt-o`, or `none`.
+paths. Key binding keys accept `ctrl-o`, `alt-o`, or `none`. Behaviors run from
+left to right: `zoxide` uses its interactive picker and `cj` uses cj's picker.
+An unavailable picker or an empty result falls through to the next behavior;
+cancellation leaves the command line unchanged, and other errors stop the chain.
+Use `["cj", "zoxide"]` to prefer cj, `["cj"]` or `["zoxide"]` to use one
+picker, or `[]` to disable the binding. Unknown or duplicate behaviors are errors.
+The legacy strings (for example, `linux = "alt-o"`) remain valid and use
+`["zoxide", "cj"]`; `"none"` disables the binding. Omitted keys retain the
+platform default, and omitted behaviors retain the default chain.
 
 Alias and explicit mount paths must be absolute or start with `~/`; Windows also
 accepts `~\`. Drive-letter paths and UNC paths are supported. cj expands only that
