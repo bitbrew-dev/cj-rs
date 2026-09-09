@@ -10,7 +10,7 @@ Usage:
   cj [OPTIONS] --jump-worktree
   cj [OPTIONS] config init [--preamp]
   cj [OPTIONS] mounts scan [--format table|json]
-  cj [OPTIONS] init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]
+  cj [OPTIONS] init <bash|zsh|nu|powershell> [--no-setup-key-binding] [-o PATH]
   cj [OPTIONS] completions <bash|zsh|nu|powershell> [-o PATH]
 
 Options:
@@ -23,7 +23,8 @@ Options:
   -f, --format <FORMAT>    Output format: table or json [default: table]
   -R, --relative           Render worktree paths relative to the current directory
   -jw, --jump-worktree     Select a worktree with fzf and print its path
-      --setup-key-binding  Include the OS-specific fzf binding in shell setup
+      --no-setup-key-binding  Omit the configured directory binding from init
+      --setup-key-binding     Accepted for compatibility; init installs the binding by default
   -o, --output <PATH>      Write generated shell source and create parent directories
       --preamp             Add unambiguous mounts to a new config
   -h, --help               Print help
@@ -111,6 +112,7 @@ impl Cli {
         let mut worktree_paths0 = false;
         let mut key_binding_zoxide = None;
         let mut setup_key_binding = false;
+        let mut no_setup_key_binding = false;
         let mut output = None;
         let mut preamp = false;
         let mut targets = Vec::new();
@@ -170,6 +172,8 @@ impl Cli {
                 key_binding_zoxide = Some((PathBuf::from(zoxide), PathBuf::from(fzf)));
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
+            } else if options && text == Some("--no-setup-key-binding") {
+                no_setup_key_binding = true;
             } else if options && matches!(text, Some("-o" | "--output")) {
                 output = Some(PathBuf::from(
                     args.next().ok_or("--output requires a path")?,
@@ -181,6 +185,19 @@ impl Cli {
             } else {
                 targets.push(argument);
             }
+        }
+
+        if setup_key_binding && no_setup_key_binding {
+            return Err("--setup-key-binding and --no-setup-key-binding cannot be used together; omit both for the default binding or use only --no-setup-key-binding to disable it".into());
+        }
+        if (setup_key_binding || no_setup_key_binding)
+            && (force_resolve
+                || resolver != ResolverOverride::Configured
+                || targets.first().and_then(|arg| arg.to_str()) != Some("init"))
+        {
+            return Err(
+                "--setup-key-binding and --no-setup-key-binding can only be used with init".into(),
+            );
         }
 
         let command = if let Some((zoxide, fzf)) = key_binding_zoxide {
@@ -248,7 +265,7 @@ impl Cli {
             parse_init(
                 &targets,
                 ShellOptions {
-                    setup_key_binding,
+                    setup_key_binding: !no_setup_key_binding,
                     output: output.clone(),
                 },
                 worktree,
@@ -341,7 +358,7 @@ fn parse_init(
     }
     if targets.len() != 2 {
         return Err(
-            "usage: cj init <bash|zsh|nu|powershell> [--setup-key-binding] [-o PATH]".into(),
+            "usage: cj init <bash|zsh|nu|powershell> [--no-setup-key-binding] [-o PATH]".into(),
         );
     }
     let shell = parse_shell(&targets[1])?;
@@ -668,7 +685,7 @@ mod tests {
                 Cli::parse(["init", name].map(Into::into)).unwrap().command,
                 Command::Init {
                     shell,
-                    setup_key_binding: false,
+                    setup_key_binding: true,
                     output: None,
                 }
             );
@@ -685,9 +702,60 @@ mod tests {
     }
 
     #[test]
+    fn init_binding_defaults_and_compatibility_flags() {
+        for name in ["bash", "zsh", "nu", "powershell", "pwsh"] {
+            let default = Cli::parse(["init", name].map(Into::into)).unwrap();
+            let legacy = Cli::parse(["init", name, "--setup-key-binding"].map(Into::into)).unwrap();
+            assert_eq!(default, legacy);
+            assert!(matches!(
+                Cli::parse(["init", name, "--no-setup-key-binding"].map(Into::into))
+                    .unwrap()
+                    .command,
+                Command::Init {
+                    setup_key_binding: false,
+                    ..
+                }
+            ));
+        }
+        for flags in [
+            ["--setup-key-binding", "--no-setup-key-binding"],
+            ["--no-setup-key-binding", "--setup-key-binding"],
+        ] {
+            let error =
+                Cli::parse(["init", "bash", flags[0], flags[1]].map(Into::into)).unwrap_err();
+            assert!(error.contains("cannot be used together"));
+            assert!(error.contains("omit both"));
+        }
+    }
+
+    #[test]
+    fn both_binding_flags_require_init() {
+        for flag in ["--setup-key-binding", "--no-setup-key-binding"] {
+            for args in [
+                vec![flag],
+                vec!["target", flag],
+                vec!["completions", "bash", flag],
+                vec!["config", "init", flag],
+                vec!["mounts", "scan", flag],
+                vec!["--worktree", flag],
+                vec!["--worktree-paths0", flag],
+                vec!["-z", "init", flag],
+                vec![flag, "--", "init", "bash"],
+            ] {
+                let error = Cli::parse(args.into_iter().map(Into::into)).unwrap_err();
+                assert!(error.contains("can only be used with init"), "{error}");
+            }
+            assert!(matches!(
+                Cli::parse(["--", flag].map(Into::into)).unwrap().command,
+                Command::Resolve { targets, .. } if targets == [flag]
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_unsupported_shell_setup_combinations() {
         assert!(Cli::parse(["init", "fish"].map(Into::into)).is_err());
-        assert!(Cli::parse(["init", "nu", "--setup-key-binding"].map(Into::into)).is_ok());
+
         assert_eq!(
             Cli::parse(["init", "powershell", "--setup-key-binding"].map(Into::into)),
             Ok(Cli {
@@ -734,7 +802,7 @@ mod tests {
                 parsed,
                 Command::Init {
                     shell: Shell::Zsh,
-                    setup_key_binding: false,
+                    setup_key_binding: true,
                     output: Some("nested/source.zsh".into()),
                 }
             );
