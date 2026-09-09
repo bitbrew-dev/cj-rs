@@ -7,8 +7,14 @@ pub fn render(shell: Shell, chord: Option<KeyBinding>, config: &Config) -> Strin
     let Some(chord @ (KeyBinding::CtrlO | KeyBinding::AltO)) = chord else {
         return cleanup.into();
     };
-    if config.key_binding_behaviors().is_empty() || shell == Shell::Nu {
+    if config.key_binding_behaviors().is_empty() {
         return cleanup.into();
+    }
+    if shell == Shell::Nu {
+        return format!(
+            "{cleanup}\n{}",
+            crate::key_bindings_nu::render(chord, config)
+        );
     }
     let history = config
         .key_binding_behaviors()
@@ -55,7 +61,7 @@ if ($__cj_previous_chord -and (Get-Command Get-PSReadLineKeyHandler -ErrorAction
 Remove-Variable -Name __cj_bound_chord -Scope Global -ErrorAction SilentlyContinue
 Remove-Variable -Name __cj_previous_chord, __cj_previous_handler -ErrorAction SilentlyContinue"#
         }
-        Shell::Nu => "",
+        Shell::Nu => crate::key_bindings_nu::cleanup(),
     }
 }
 

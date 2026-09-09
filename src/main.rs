@@ -3,6 +3,7 @@ mod completions;
 mod config;
 mod config_init;
 mod key_bindings;
+mod key_bindings_nu;
 mod key_history;
 mod key_zoxide;
 mod mounts;

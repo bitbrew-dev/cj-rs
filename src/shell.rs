@@ -11,7 +11,12 @@ pub fn render(
 ) -> Result<String, String> {
     match shell {
         Shell::Bash | Shell::Zsh => render_posix(shell, config_path, binding, config),
-        Shell::Nu => render_nu(config_path, config),
+        Shell::Nu => render_nu(config_path, config).map(|wrapper| {
+            format!(
+                "{wrapper}\n{}",
+                crate::key_bindings::render(shell, binding, config)
+            )
+        }),
         Shell::Pwsh => render_powershell(config_path, binding, config),
     }
 }
@@ -258,11 +263,7 @@ fn render_nu(config_path: Option<&Path>, settings: &Config) -> Result<String, St
         .collect::<Vec<_>>()
         .join(", ");
     Ok(format!(
-        r#"export-env {{
-    $env.__cj_history = []
-}}
-
-def _cj-is-repeated [value: string, ticker: string] {{
+        r#"def _cj-is-repeated [value: string, ticker: string] {{
     ($value | str length) > 0 and (($value | split chars | all {{ |char| $char == $ticker }}))
 }}
 
