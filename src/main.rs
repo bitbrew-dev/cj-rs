@@ -2,6 +2,7 @@ mod cli;
 mod completions;
 mod config;
 mod config_init;
+mod key_history;
 mod mounts;
 mod path_bytes;
 mod resolver;
