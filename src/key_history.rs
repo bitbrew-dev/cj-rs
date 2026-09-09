@@ -140,6 +140,8 @@ mod tests {
         );
     }
 
+    // Windows may expose a bash.exe WSL launcher without an installed distribution.
+    #[cfg(unix)]
     #[test]
     fn posix_history_completion_is_reversible_and_read_only() {
         for shell in [Shell::Bash, Shell::Zsh] {
@@ -174,6 +176,7 @@ _cj_key_history "$_cj_key_buffer" "$_cj_key_cursor"
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn posix_edit_cursor_change_cancel_and_reinit_restart_history_cycle() {
         for shell in [Shell::Bash, Shell::Zsh] {
@@ -205,6 +208,7 @@ _cj_key_history 'cd ' 3
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn posix_history_quotes_special_paths_and_preserves_multiline_buffer() {
         for shell in [Shell::Bash, Shell::Zsh] {
