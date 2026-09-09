@@ -493,7 +493,7 @@ fn generated_wrappers_jump_and_propagate_failures() {
         let mut success = shell_command(
             shell,
             &init.stdout,
-            "eval \"$1\"; cd -z \"$2\" \"$3\"; printf '%s\\n' \"$PWD\"",
+            "eval \"$1\"; before=$PWD; cd -z \"$2\" \"$3\"; printf '%s\\n' \"$PWD\"; cd v; [[ $PWD == \"$before\" ]]",
         );
         success
             .current_dir(&fixture.cwd)
@@ -605,15 +605,15 @@ fn generated_wrappers_navigate_down_with_custom_tickers() {
         let no_history = no_history.output().expect("run available shell");
         assert_eq!(no_history.status.code(), Some(2));
         assert!(no_history.stdout.is_empty());
-        assert_eq!(no_history.stderr, b"cj: no remembered downward route\n");
+        assert_eq!(no_history.stderr, b"cj: directory history exhausted\n");
 
         let clear_script = "eval \"$1\"; cd uu; cd other; builtin cd ..; cd d";
         let mut cleared = shell_with_setup(shell, &init.stdout, clear_script);
         cleared.current_dir(&leaf).env("PATH", &path);
         let cleared = cleared.output().expect("run available shell");
-        assert_eq!(cleared.status.code(), Some(2));
+        assert_success(&cleared);
         assert!(cleared.stdout.is_empty());
-        assert_eq!(cleared.stderr, b"cj: no remembered downward route\n");
+        assert!(cleared.stderr.is_empty());
 
         let shadow_script = "eval \"$1\"; cd uu; cd d; printf '%s\\n' \"$PWD\"";
         let mut shadowed = shell_with_setup(shell, &init.stdout, shadow_script);

@@ -104,12 +104,23 @@ cd external-ssd # a configured mount
 cd top          # top level of the current Git repository
 cd origin       # main worktree; "og" is also enabled by default
 cd ^^^          # three directories up
-cd vvv          # three levels back down along the remembered route
+cd vvv          # go back three directory-history entries
 ```
 
-Downward navigation is browser-style: moving up remembers the directory you left,
-and the down ticker walks back toward it one level at a time. A different successful
-directory change clears that route. Existing directories always win over tickers.
+The down ticker uses browser-style directory history: every successful `cd` change
+remembers the directory you left, including unrelated paths, aliases, mounts, raw
+paths, and zoxide jumps. `cd v` goes back one entry; `cd vvv` goes back three.
+Moving up with `cd ^^^` records each traversed parent so `cd vvv` retraces the move.
+History keeps the latest 100 departures in the current shell session and resets
+when you reload the integration. Existing directories always win over tickers.
+
+Going back consumes entries without adding the current directory. An empty or
+insufficient history reports `cj: directory history exhausted`; a missing history
+destination reports the shell's directory error. Both leave history and the
+current directory unchanged. Failed commands and moves to the current directory
+also preserve history. Native escapes such as `builtin cd` or `Set-Location` bypass
+history tracking. Regenerate and reload your integration after upgrading to use
+this behavior.
 
 Resolver flags make the choice explicit:
 
