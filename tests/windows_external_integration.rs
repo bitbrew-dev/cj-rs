@@ -101,7 +101,7 @@ fn powershell_wrapper_changes_its_calling_session_with_zoxide() {
 }
 
 #[test]
-fn powershell_wrapper_jumps_to_the_selected_worktree() {
+fn powershell_wrapper_requires_tab_for_worktree_selection() {
     let git = GitFixture::new("windows-powershell-fzf");
     let tool = copy_tool(git.temp.path(), "fzf.exe");
     let config = git.temp.path().join("fzf config.toml");
@@ -118,26 +118,43 @@ fn powershell_wrapper_jumps_to_the_selected_worktree() {
     assert_success(&init);
     fs::write(&source, init.stdout).expect("write PowerShell integration");
 
-    let output = Command::new("pwsh")
+    for flag in ["-jw", "--jump-worktree"] {
+        let output = Command::new("pwsh")
         .args([
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            ". $env:CJ_SOURCE; cd -jw; [Console]::Out.Write((Get-Location).ProviderPath)",
+            ". $env:CJ_SOURCE; $result = 0; try { cd $env:CJ_JUMP_FLAG } catch { [Console]::Error.Write($_.Exception.Message); $result = 2 }; [Console]::Out.Write((Get-Location).ProviderPath); exit $result",
         ])
         .current_dir(&git.main_nested)
-        .env("CJ_SOURCE", source)
+        .env("CJ_SOURCE", &source)
+        .env("CJ_JUMP_FLAG", flag)
         .env("CJ_FAKE_TOOL", "fzf")
         .env("CJ_FAKE_MODE", "success")
         .env("CJ_FAKE_SELECTION", "1")
-        .env("CJ_FAKE_ARGS", args)
-        .env("CJ_FAKE_STDIN", stdin)
+        .env("CJ_FAKE_ARGS", &args)
+        .env("CJ_FAKE_STDIN", &stdin)
         .env("PATH", path_with_cj())
         .output()
         .expect("run PowerShell integration");
-    assert_success(&output);
-    assert_eq!(output.stdout, git.linked.as_os_str().as_encoded_bytes());
+        assert!(
+            !output.status.success(),
+            "PowerShell accepted {flag} without Tab"
+        );
+        assert_eq!(
+            output.stdout,
+            git.main_nested.as_os_str().as_encoded_bytes()
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("type cd -jw and press Tab to select a worktree")
+        );
+    }
+    assert!(
+        !args.exists() && !stdin.exists(),
+        "executing the Tab token must not invoke fzf"
+    );
 }
 
 #[test]

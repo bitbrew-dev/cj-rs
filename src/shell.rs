@@ -79,7 +79,8 @@ function cd() {{
             _cj_nav_arg=
             ;;
         -jw|--jump-worktree)
-            _cj_nav_arg=
+            printf '%s\n' 'cj: type cd -jw and press Tab to select a worktree' >&2
+            return 2
             ;;
         -Z|--no-zoxide)
             if [[ $# -eq 2 ]]; then
@@ -112,7 +113,7 @@ function cd() {{
         _cj_nav_mode=down
     fi
     case "${{1-}}" in
-        -z|--zoxide|-Z|--no-zoxide|-jw|--jump-worktree) _cj_args=("$@") ;;
+        -z|--zoxide|-Z|--no-zoxide) _cj_args=("$@") ;;
         *) _cj_args=(-- "$@") ;;
     esac
     _cj_before="$(\builtin pwd -P)" || return
@@ -312,6 +313,10 @@ export def --env --wrapped __cj_cd [...args: string] {{
         return
     }}
 
+    if ($args.0 in ['-jw' '--jump-worktree']) {{
+        error make {{ msg: 'cj: type cd -jw and press Tab to select a worktree' }}
+    }}
+
     if (($args.0 == '-r') or ($args.0 == '--raw')) {{
         if ($args | length) != 2 {{
             error make {{ msg: 'cj: --raw requires exactly one target' }}
@@ -345,7 +350,7 @@ export def --env --wrapped __cj_cd [...args: string] {{
             $env.CJ_INTERNAL_DOWN_ROUTE = ''
             return
         }}
-    }} else if ($args.0 | str starts-with '-') and (not ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide' '-jw' '--jump-worktree'])) {{
+    }} else if ($args.0 | str starts-with '-') and (not ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide'])) {{
         if ($args | length) != 1 {{ error make {{ msg: 'cj: Nushell cd accepts one target' }} }}
         cd $args.0
         $env.CJ_INTERNAL_DOWN_ROUTE = ''
@@ -354,7 +359,7 @@ export def --env --wrapped __cj_cd [...args: string] {{
 
     let nav_arg = if (($args | length) == 1) {{ $args.0 }} else if (($args | length) == 2) and (($args.0 == '-Z') or ($args.0 == '--no-zoxide')) {{ $args.1 }} else {{ '' }}
     let before = ($env.PWD | path expand)
-    let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide' '-jw' '--jump-worktree']) {{ $args }} else {{ ['--'] | append $args }}
+    let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide']) {{ $args }} else {{ ['--'] | append $args }}
     let result = with-env {{ CJ_INTERNAL_DOWN_ROUTE: $env.CJ_INTERNAL_DOWN_ROUTE }} {{
         ^cj ...$config ...$invoke_args | complete
     }}
@@ -476,6 +481,10 @@ function global:cd {{
     }}
     $first = [string]$cjArgs[0]
 
+    if (($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{
+        throw 'cj: type cd -jw and press Tab to select a worktree'
+    }}
+
     if (($first -ceq '-r') -or ($first -ceq '--raw')) {{
         if ($cjArgs.Count -ne 2) {{ throw 'cj: --raw requires exactly one target' }}
         Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[1] -ErrorAction Stop
@@ -503,11 +512,11 @@ function global:cd {{
         $global:__cj_down_route = $null
         return
     }}
-    if ($first.StartsWith('-') -and -not (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree'))) {{ throw "cj: unsupported PowerShell cd option: $first" }}
+    if ($first.StartsWith('-') -and -not (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ throw "cj: unsupported PowerShell cd option: $first" }}
 
     $navArg = if ($cjArgs.Count -eq 1) {{ $first }} elseif (($cjArgs.Count -eq 2) -and (($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ [string]$cjArgs[1] }} else {{ '' }}
     $before = (Microsoft.PowerShell.Management\Get-Location).ProviderPath
-    [string[]]$invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide') -or ($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
+    [string[]]$invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
     $hadRoute = Test-Path Env:CJ_INTERNAL_DOWN_ROUTE
     $oldRoute = $env:CJ_INTERNAL_DOWN_ROUTE
     $configArgs = $script:__cj_config
@@ -694,22 +703,11 @@ mod tests {
     }
 
     #[test]
-    fn wrappers_forward_jump_worktree_to_cj() {
-        let bash = render(Shell::Bash, None, None, &Config::default()).unwrap();
-        assert!(bash.contains("-jw|--jump-worktree)"));
-        assert!(bash.contains("-jw|--jump-worktree) _cj_args=(\"$@\")"));
-        assert!(!bash.contains("pick-worktree"));
-
-        let nu = render(Shell::Nu, None, None, &Config::default()).unwrap();
-        assert!(nu.contains("'-jw' '--jump-worktree'"));
-        assert!(nu.contains("^cj ...$config ...$invoke_args | complete"));
-        assert!(!nu.contains("pick-worktree"));
-
-        let powershell = render(Shell::Pwsh, None, None, &Config::default()).unwrap();
-        assert!(powershell.contains("($first -ceq '-jw')"));
-        assert!(powershell.contains("($first -ceq '--jump-worktree')"));
-        assert!(powershell.contains("[string[]]$invokeArgs"));
-        assert!(!powershell.contains("pick-worktree"));
+    fn wrappers_explain_that_jump_tokens_require_tab() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Nu, Shell::Pwsh] {
+            let source = render(shell, None, None, &Config::default()).unwrap();
+            assert!(source.contains("type cd -jw and press Tab to select a worktree"));
+        }
     }
 
     #[test]
