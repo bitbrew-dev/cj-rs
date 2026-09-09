@@ -409,7 +409,7 @@ fn generated_zsh_completion_replaces_jump_tokens_in_real_zle() {
     setup.extend_from_slice(
         br#"
 autoload -Uz compinit
-compinit -D
+compinit -i -D
 _test_complete() {
     _cj_complete_cd
     printf '%s\000' "$compstate[nmatches]" >> "$CJ_TEST_RESULTS"
