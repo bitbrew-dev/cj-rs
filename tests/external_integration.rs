@@ -326,7 +326,7 @@ fn generated_posix_tab_completion_offers_native_worktree_candidates() {
                 )
             } else {
                 concat!(
-                    "eval \"$1\"; typeset -ga words; words=(cd \"$2\"); integer CURRENT=2; ",
+                    "eval \"$1\"; typeset -A compstate; typeset -ga words; words=(cd \"$2\"); integer CURRENT=2; ",
                     "compadd() { local emit=; for value in \"$@\"; do ",
                     "if [[ -n \"$emit\" ]]; then printf '%s\\000' \"$value\"; ",
                     "elif [[ \"$value\" == -- ]]; then emit=1; fi; done; }; ",
@@ -388,6 +388,96 @@ fn generated_posix_tab_completion_offers_native_worktree_candidates() {
         !fixture.args.exists() && !fixture.stdin.exists(),
         "completion invoked fzf"
     );
+}
+
+#[test]
+fn generated_zsh_completion_replaces_jump_tokens_in_real_zle() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        return;
+    }
+    let fixture = PickerFixture::new("zle-worktree-completion-雪");
+    let init = cj(&fixture.git.main_nested, fixture.git.temp.path())
+        .arg("-C")
+        .arg(&fixture.config)
+        .args(["init", "zsh"])
+        .output()
+        .expect("render zsh setup");
+    assert_success(&init);
+    let script = fixture.git.temp.path().join("completion.zsh");
+    let results = fixture.git.temp.path().join("completion-results");
+    let mut setup = init.stdout;
+    setup.extend_from_slice(
+        br#"
+autoload -Uz compinit
+compinit -D
+_test_complete() {
+    _cj_complete_cd
+    printf '%s\000' "$compstate[nmatches]" >> "$CJ_TEST_RESULTS"
+}
+zle -C _test_complete_widget complete-word _test_complete
+zle-line-init() {
+    local flag
+    local -a parsed
+    for flag in -jw --jump-worktree -jw; do
+        BUFFER="cd $flag"
+        CURSOR=$#BUFFER
+        # Also exercise a cursor inside the token, where SUFFIX is nonempty.
+        [[ -e "$CJ_TEST_RESULTS" && "$flag" == -jw ]] && (( CURSOR-- ))
+        zle _test_complete_widget
+        parsed=(${(z)BUFFER})
+        printf '%s\000' "${(Q)parsed[2]}" "$PWD" >> "$CJ_TEST_RESULTS"
+    done
+    exit
+}
+zle -N zle-line-init
+test_buffer=''
+vared test_buffer
+"#,
+    );
+    fs::write(&script, setup).expect("write zle test script");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cj"));
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let output = Command::new("zsh")
+        .args([
+            "-fc",
+            r#"zmodload zsh/zpty || exit 1
+zpty -b cj_test zsh -fi "$CJ_TEST_SCRIPT" || exit 1
+for attempt in {1..200}; do
+    while zpty -r cj_test output; do print -rn -- "$output"; done
+    zpty -t cj_test || break
+    sleep 0.05
+done
+timed_out=0
+zpty -t cj_test && timed_out=1
+while zpty -r cj_test output; do print -rn -- "$output"; done
+zpty -d cj_test
+exit $timed_out"#,
+        ])
+        .current_dir(&fixture.git.main_nested)
+        .env("PATH", env::join_paths(paths).expect("join PATH"))
+        .env("TERM", "xterm")
+        .env("CJ_TEST_SCRIPT", &script)
+        .env("CJ_TEST_RESULTS", &results)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .output()
+        .expect("run real zsh completion");
+    assert_success(&output);
+    let results = fs::read(results).expect("completion widget produced results");
+    let fields = nul_strings(&results);
+    assert_eq!(fields.len(), 9);
+    for result in fields.chunks_exact(3) {
+        assert_eq!(result[0], "2", "real compadd must accept both worktrees");
+        let destination = Path::new(result[1]);
+        assert!(
+            destination == fixture.git.main || destination == fixture.git.linked,
+            "completion must insert one quoted worktree path, got {destination:?}"
+        );
+        assert_eq!(result[2], fixture.git.main_nested.to_str().unwrap());
+    }
+    assert!(!fixture.args.exists(), "Tab must not run cj's fzf picker");
 }
 
 #[test]

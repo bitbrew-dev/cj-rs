@@ -179,6 +179,10 @@ function _cj_complete_cd() {{
             candidates+=("$candidate")
         done < <(\command cj{config} --worktree-paths0 2>/dev/null)
         (( ${{#candidates[@]}} )) || return 0
+        # Replace the jump token instead of matching paths against it.
+        PREFIX='' SUFFIX=''
+        # Offer complete destinations instead of inserting their common parent.
+        compstate[insert]=menu
         compadd -f -- "${{candidates[@]}}"
         return
     fi
