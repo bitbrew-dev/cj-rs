@@ -373,3 +373,154 @@ tr '\000' '\n' | head -n 1
         );
     }
 }
+
+#[test]
+fn powershell_dispatcher_preserves_buffers_and_orders_behaviors() {
+    if Command::new("pwsh").arg("-Version").output().is_err() {
+        return;
+    }
+    // Exercise PowerShell parsing and dispatch with an in-memory line-editor
+    // adapter. The native editor lifecycle is covered by the PTY tests.
+    for (behaviors, status, candidates, expected) in [
+        ("'zoxide', 'cj'", "0", "/candidate", "code '/a''s 雪/‘’'"),
+        ("'zoxide', 'cj'", "130", "/candidate", "code"),
+        ("'zoxide', 'cj'", "7", "/candidate", "code"),
+        ("'zoxide', 'cj'", "0", "", "code '/new history'"),
+        ("'cj', 'zoxide'", "0", "/candidate", "code '/new history'"),
+    ] {
+        let fixture = Fixture::new();
+        let source = fixture.source("powershell", behaviors);
+        let script = fixture.temp.path().join("widget.ps1");
+        fs::write(&script, format!(r#"
+Import-Module Microsoft.PowerShell.Utility
+Import-Module Microsoft.PowerShell.Management
+$ErrorActionPreference = 'Stop'
+$PSModuleAutoLoadingPreference = 'None'
+Add-Type -TypeDefinition @'
+namespace Microsoft.PowerShell {{
+    public static class PSConsoleReadLine {{
+        public static string Buffer = "code";
+        public static int Cursor = 1;
+        public static void GetBufferState(ref string buffer, ref int cursor) {{ buffer = Buffer; cursor = Cursor; }}
+        public static void Replace(int start, int length, string text) {{ Buffer = text; }}
+        public static void SetCursorPosition(int cursor) {{ Cursor = cursor; }}
+    }}
+}}
+'@
+{source}
+$global:__cj_history = @('/old history', '/new history')
+Invoke-CjKeyWidget
+[Console]::WriteLine([Microsoft.PowerShell.PSConsoleReadLine]::Buffer)
+[Console]::WriteLine([Microsoft.PowerShell.PSConsoleReadLine]::Cursor)
+[Console]::WriteLine((Get-Location).Path)
+"#)).unwrap();
+        let mut command = Command::new("pwsh");
+        command
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
+            .arg(&script)
+            .current_dir(fixture.temp.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    Path::new(env!("CARGO_BIN_EXE_cj"))
+                        .parent()
+                        .unwrap()
+                        .display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("CJ_TEST_PICK", "/a's 雪/‘’\n")
+            .env("CJ_TEST_PICK_STATUS", status)
+            .env("CJ_TEST_CANDIDATES", candidates);
+        fixture.environment(&mut command);
+        let output = command.output().unwrap();
+        assert_success(&output);
+        let text = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<_> = text.lines().collect();
+        let expected = expected.replace('‘', "‘‘").replace('’', "’’");
+        assert_eq!(
+            lines[0],
+            expected,
+            "{status}, {behaviors}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            lines[1],
+            if status == "130" || status == "7" {
+                1
+            } else {
+                expected.encode_utf16().count()
+            }
+            .to_string()
+        );
+        assert_eq!(lines[2], fixture.temp.path().to_str().unwrap());
+    }
+}
+
+#[test]
+fn sourcing_again_updates_only_the_binding_owned_by_cj() {
+    let bash = if Path::new("/opt/homebrew/bin/bash").exists() {
+        "/opt/homebrew/bin/bash"
+    } else {
+        "bash"
+    };
+    for (shell, executable) in [("bash", bash), ("zsh", "zsh")] {
+        if Command::new(executable).arg("--version").output().is_err() {
+            continue;
+        }
+        if shell == "bash"
+            && !Command::new(executable)
+                .args(["-c", "(( BASH_VERSINFO[0] >= 4 ))"])
+                .status()
+                .unwrap()
+                .success()
+        {
+            continue;
+        }
+        let fixture = Fixture::new();
+        let first = fixture.source_with_chord(shell, "'cj'", "ctrl-o");
+        let second = fixture.source_with_chord(shell, "'cj'", "alt-o");
+        let disabled = fixture.source_with_chord(shell, "", "alt-o");
+        let query = if shell == "bash" {
+            "bind -X 2>/dev/null"
+        } else {
+            "bindkey '^O'; bindkey '^[o'"
+        };
+        let replace = if shell == "bash" {
+            r#"bind '"\C-o":beginning-of-line'"#
+        } else {
+            "bindkey '^O' beginning-of-line"
+        };
+        let query_user = if shell == "bash" {
+            "bind -q beginning-of-line"
+        } else {
+            "bindkey '^O'"
+        };
+        let script = fixture.temp.path().join("reload.sh");
+        fs::write(&script, format!("{first}\n{second}\n{query}\nprintf '\\0'\n{disabled}\n{query}\nprintf '\\0'\n{first}\n{replace}\n{disabled}\n{query_user}\n")).unwrap();
+        let output = Command::new(executable).arg(&script).output().unwrap();
+        assert_success(&output);
+        let sections = fields(&output);
+        assert!(
+            sections[0].contains("_cj_key_widget"),
+            "{shell}: {}",
+            sections[0]
+        );
+        if shell == "bash" {
+            assert!(!sections[0].contains("\\C-o"));
+            assert!(sections[0].contains("\\eo"));
+        } else {
+            assert!(sections[0].contains("\"^O\" undefined-key"));
+        }
+        assert!(
+            !sections[1].contains("_cj_key_widget"),
+            "{shell}: {}",
+            sections[1]
+        );
+        assert!(sections[2].contains("beginning-of-line"));
+        if shell == "bash" {
+            assert!(sections[2].contains("\\C-o"));
+        }
+    }
+}
