@@ -68,11 +68,104 @@ fn generation_is_deterministic_and_keeps_source_on_stdout() {
             "zsh",
             "nu",
             "powershell",
+            "--setup-key-binding",
+            "--no-setup-key-binding",
             "repo",
             "home base",
             "code",
         ] {
             assert!(source.contains(expected), "{shell} omitted {expected:?}");
+        }
+    }
+}
+
+#[test]
+fn init_installs_binding_by_default_and_opt_out_keeps_shell_integration() {
+    let temp = TempDir::new("default-init-binding");
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "").expect("write default config");
+
+    for (shell, binding, wrapper, completion) in [
+        (
+            "bash",
+            "_cj_key_widget() {",
+            "function cd()",
+            "complete -F _cj_complete_cd cd",
+        ),
+        (
+            "zsh",
+            "_cj_key_widget() {",
+            "function cd()",
+            "compdef _cj_complete_cd cd",
+        ),
+        (
+            "powershell",
+            "Set-PSReadLineKeyHandler -Chord",
+            "function global:cd",
+            "function global:TabExpansion2",
+        ),
+        (
+            "nu",
+            "name: cj-directory",
+            "export def --env --wrapped __cj_cd",
+            "_cj-complete-cd",
+        ),
+    ] {
+        let default = generate(temp.path(), &config, "init", shell);
+        let legacy =
+            generate_with_args(temp.path(), &config, ["init", shell, "--setup-key-binding"]);
+        let disabled = generate_with_args(
+            temp.path(),
+            &config,
+            ["init", shell, "--no-setup-key-binding"],
+        );
+        assert_eq!(
+            default, legacy,
+            "{shell}: compatibility flag changed output"
+        );
+        assert!(
+            disabled.contains(wrapper),
+            "{shell}: opt-out removed cd wrapper"
+        );
+        assert!(
+            disabled.contains(completion),
+            "{shell}: opt-out removed cd completion"
+        );
+        assert!(
+            !disabled.contains(binding),
+            "{shell}: opt-out installed binding"
+        );
+        assert!(
+            default.contains(binding),
+            "{shell}: default omitted binding"
+        );
+        if shell == "nu" {
+            assert!(default.contains("_cj-key-widget"));
+        }
+        parse_source(temp.path(), "init-no-binding", shell, &disabled);
+    }
+}
+
+#[test]
+fn init_respects_configured_binding_disablement() {
+    let temp = TempDir::new("disabled-init-binding");
+    let config = temp.path().join("config.toml");
+    for settings in [
+        "[key-bindings]\nmacos = 'none'\nlinux = 'none'\nwindows = 'none'\n",
+        "[key-bindings]\nmacos = { behaviors = [] }\nlinux = { behaviors = [] }\nwindows = { behaviors = [] }\n",
+    ] {
+        fs::write(&config, settings).expect("write disabled binding config");
+        for shell in ["bash", "zsh", "nu", "powershell"] {
+            let default = generate(temp.path(), &config, "init", shell);
+            let disabled = generate_with_args(
+                temp.path(),
+                &config,
+                ["init", shell, "--no-setup-key-binding"],
+            );
+            assert_eq!(
+                default, disabled,
+                "{shell}: disabled config installed binding"
+            );
         }
     }
 }
@@ -177,11 +270,7 @@ fn powershell_integration_and_completion_work_when_available() {
     let completions_path = temp.path().join("cj-completions.ps1");
     fs::write(
         &integration_path,
-        generate_with_args(
-            temp.path(),
-            &config,
-            ["init", "powershell", "--setup-key-binding"],
-        ),
+        generate(temp.path(), &config, "init", "powershell"),
     )
     .expect("write PowerShell integration");
     fs::write(
@@ -254,6 +343,11 @@ fn bash_completion_handles_nested_commands_and_spaced_names() {
         let forced = bash_complete(&completions, setup);
         assert!(!forced.lines().any(|value| value == "bash"));
         assert!(!forced.lines().any(|value| value == "--setup-key-binding"));
+        assert!(
+            !forced
+                .lines()
+                .any(|value| value == "--no-setup-key-binding")
+        );
     }
 
     let completed = bash_complete(&completions, "COMP_WORDS=(cj init bash ''); COMP_CWORD=3");
@@ -262,6 +356,11 @@ fn bash_completion_handles_nested_commands_and_spaced_names() {
         completed
             .lines()
             .any(|value| value == "--setup-key-binding")
+    );
+    assert!(
+        completed
+            .lines()
+            .any(|value| value == "--no-setup-key-binding")
     );
     assert!(completed.lines().any(|value| value == "-o"));
     assert!(completed.lines().any(|value| value == "--output"));
@@ -272,6 +371,16 @@ fn bash_completion_handles_nested_commands_and_spaced_names() {
     );
     assert!(completion_flags.lines().any(|value| value == "-o"));
     assert!(completion_flags.lines().any(|value| value == "--output"));
+    assert!(
+        !completion_flags
+            .lines()
+            .any(|value| value == "--setup-key-binding")
+    );
+    assert!(
+        !completion_flags
+            .lines()
+            .any(|value| value == "--no-setup-key-binding")
+    );
 
     let worktree = bash_complete(&completions, "COMP_WORDS=(cj -w ''); COMP_CWORD=2");
     assert!(worktree.lines().any(|value| value == "--relative"));

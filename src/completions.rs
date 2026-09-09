@@ -146,7 +146,7 @@ fn bash(destinations: &[String]) -> String {
                 config:init) candidates=(--preamp "${{common_flags[@]}}") ;;
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
-                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
+                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --no-setup-key-binding --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --no-setup-key-binding --setup-key-binding "${{common_flags[@]}}"); fi ;;
                 completions:) if [[ -n "$command_value" ]]; then candidates=(-o --output "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
@@ -234,7 +234,7 @@ _cj_complete() {{
                 config:init) candidates=(--preamp "${{common_flags[@]}}") ;;
                 mounts:) candidates=(scan "${{common_flags[@]}}") ;;
                 mounts:scan) candidates=(-f --format "${{common_flags[@]}}") ;;
-                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --setup-key-binding "${{common_flags[@]}}"); fi ;;
+                init:) if [[ -n "$command_value" ]]; then candidates=(-o --output --no-setup-key-binding --setup-key-binding "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output --no-setup-key-binding --setup-key-binding "${{common_flags[@]}}"); fi ;;
                 completions:) if [[ -n "$command_value" ]]; then candidates=(-o --output "${{common_flags[@]}}"); else candidates=("${{shells[@]}}" -o --output "${{common_flags[@]}}"); fi ;;
                 *) candidates=("${{commands[@]}}" "${{destinations[@]}}" "${{flags[@]}}") ;;
             esac; fi
@@ -285,6 +285,7 @@ export extern cj [
 
 export extern "cj init" [
     shell: string@"nu-complete cj shells"
+    --no-setup-key-binding
     --setup-key-binding
     --output(-o): path
     --config(-C): path
@@ -393,7 +394,7 @@ fn powershell(destinations: &[String]) -> String {
             'config:init' {{ @('--preamp') + $commonFlags }}
             'mounts:' {{ @('scan') + $commonFlags }}
             'mounts:scan' {{ @('-f', '--format') + $commonFlags }}
-            'init:' {{ if ($commandValue) {{ @('-o', '--output', '--setup-key-binding') + $commonFlags }} else {{ $shells + @('-o', '--output', '--setup-key-binding') + $commonFlags }} }}
+            'init:' {{ if ($commandValue) {{ @('-o', '--output', '--no-setup-key-binding', '--setup-key-binding') + $commonFlags }} else {{ $shells + @('-o', '--output', '--no-setup-key-binding', '--setup-key-binding') + $commonFlags }} }}
             'completions:' {{ if ($commandValue) {{ @('-o', '--output') + $commonFlags }} else {{ $shells + @('-o', '--output') + $commonFlags }} }}
             default {{ $commands + $destinations + $flags }}
         }} }}

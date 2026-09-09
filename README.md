@@ -77,7 +77,7 @@ For PowerShell 7:
 
 ```powershell
 $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
-cj init powershell --setup-key-binding -o (Join-Path $CjConfig 'init.ps1')
+cj init powershell -o (Join-Path $CjConfig 'init.ps1')
 cj completions powershell -o (Join-Path $CjConfig 'completions.ps1')
 
 # Add these lines to $PROFILE:
@@ -89,8 +89,12 @@ $CjConfig = Join-Path (Split-Path -Parent $PROFILE) 'cj'
 Restart the shell or source its configuration after making the change.
 `pwsh` is accepted as an input alias for `powershell`; generated source and
 completion candidates use the canonical `powershell` name.
-On PowerShell, the optional picker binding is installed through PSReadLine when
-that module is available and is otherwise skipped without changing the profile.
+`cj init` installs the configured directory completion binding by default on
+Bash, Zsh, Nushell, and PowerShell. The Bash widget requires Bash 4 or newer;
+macOS's system Bash 3 still supports the `cd` wrapper and Tab completion.
+PowerShell installs the widget when PSReadLine is available. Use
+`cj init <shell> --no-setup-key-binding` to generate the wrapper and completions
+without installing the widget.
 
 ## Jumping
 
@@ -173,19 +177,41 @@ inserts its path; press Enter to change directory. Pressing Enter while the jump
 token is still present shows a reminder to use Tab and leaves the directory unchanged.
 
 The standalone `cj -jw` / `cj --jump-worktree` command remains available to print
-a path selected through fzf; it also powers the optional worktree key binding.
+a worktree path selected through fzf.
 
-To install an fzf worktree jump key together with the `cd` wrapper, add the setup
-flag to shell initialization:
+The key installed by `cj init` completes a directory from history. Its default
+chord is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and Windows, and
+<kbd>Alt</kbd>+<kbd>O</kbd> on Linux. Each OS's `key-bindings` entry has an ordered
+`behaviors` list, defaulting to `["zoxide", "cj"]`. `zoxide` opens its interactive
+directory picker using fzf. `cj` cycles through cj's browser-style directory
+history without external dependencies. Both append a safely quoted directory to
+the current command line; press Enter to execute it. The key itself never changes
+the current directory.
+
+Behaviors run from left to right until one supplies a directory. A missing
+dependency or empty candidate source falls through to the next behavior.
+Cancelling a picker stops the chain and preserves the command line, cursor, and
+current directory; other errors stop with a diagnostic. Reorder the list to
+change which behavior is tried first, or use a single entry to select one source.
+
+After a cj history completion, repeated presses cycle from newest to oldest,
+then restore the original line and cursor. Editing the line starts a new cycle.
+Completion itself does not consume history. Dependency availability is checked
+on each invocation, so installing or removing zoxide or fzf needs no regeneration.
+The binding preserves zoxide settings such as `_ZO_FZF_OPTS`.
+
+Regenerate shell integration after upgrading to receive the default binding:
 
 ```bash
-eval "$(cj init zsh --setup-key-binding)"
+cj init zsh -o ~/.config/cj/init.zsh
+source ~/.config/cj/init.zsh
 ```
 
-The default picker key is <kbd>Ctrl</kbd>+<kbd>O</kbd> on macOS and Windows, and
-<kbd>Alt</kbd>+<kbd>O</kbd> on Linux. Pressing it invokes the same interactive
-worktree picker as `cj -jw` and changes directory to the selected path. The key
-binding requires `fzf`; ordinary directory jumps and worktree listing do not.
+To keep the `cd` wrapper and Tab completion without the directory widget, add
+`--no-setup-key-binding`. The old `--setup-key-binding` flag is still accepted as
+a compatibility no-op; existing initialization commands can keep it or remove it.
+The two flags cannot be combined. An empty `behaviors` list in the current OS's
+`key-bindings` entry disables the widget in configuration.
 
 ## Configuration
 
@@ -228,11 +254,12 @@ onedrive-work = { provider = "onedrive", account = "business" }
 
 Program values may be executable names found on `PATH` or explicit executable
 paths. Key binding keys accept `ctrl-o`, `alt-o`, or `none`. Behaviors run from
-left to right: `zoxide` uses its interactive picker and `cj` uses cj's picker.
-An unavailable picker or an empty result falls through to the next behavior;
-cancellation leaves the command line unchanged, and other errors stop the chain.
-Use `["cj", "zoxide"]` to prefer cj, `["cj"]` or `["zoxide"]` to use one
-picker, or `[]` to disable the binding. Unknown or duplicate behaviors are errors.
+left to right: `zoxide` uses its interactive picker and `cj` cycles through
+browser-style directory history. Missing dependencies or an empty candidate source
+fall through; cancellation preserves the command line, cursor, and directory,
+and other errors stop the chain. Use `["cj", "zoxide"]` to prefer cj,
+`["cj"]` or `["zoxide"]` for one source, or `[]` to disable the binding.
+Unknown or duplicate behaviors are errors.
 The legacy strings (for example, `linux = "alt-o"`) remain valid and use
 `["zoxide", "cj"]`; `"none"` disables the binding. Omitted keys retain the
 platform default, and omitted behaviors retain the default chain.
@@ -263,7 +290,7 @@ Use `-C` or `--config` to select a different file. When generating shell setup,
 the selected config path is embedded safely in the generated wrapper:
 
 ```bash
-cj -C "$HOME/.config/cj/work.toml" init zsh --setup-key-binding \
+cj -C "$HOME/.config/cj/work.toml" init zsh \
   -o "$HOME/.config/cj/init.zsh"
 ```
 
