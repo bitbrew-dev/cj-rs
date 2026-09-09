@@ -50,6 +50,10 @@ pub enum Command {
         jump: bool,
     },
     WorktreePaths0,
+    KeyBindingZoxide {
+        zoxide: PathBuf,
+        fzf: PathBuf,
+    },
     Init {
         shell: Shell,
         setup_key_binding: bool,
@@ -105,6 +109,7 @@ impl Cli {
         let mut relative = false;
         let mut jump = false;
         let mut worktree_paths0 = false;
+        let mut key_binding_zoxide = None;
         let mut setup_key_binding = false;
         let mut output = None;
         let mut preamp = false;
@@ -152,6 +157,17 @@ impl Cli {
                 jump = true;
             } else if options && text == Some("--worktree-paths0") {
                 worktree_paths0 = true;
+            } else if options && text == Some("--internal-key-binding-zoxide") {
+                if key_binding_zoxide.is_some() {
+                    return Err("--internal-key-binding-zoxide cannot be repeated".into());
+                }
+                let zoxide = args
+                    .next()
+                    .ok_or("--internal-key-binding-zoxide requires zoxide and fzf paths")?;
+                let fzf = args
+                    .next()
+                    .ok_or("--internal-key-binding-zoxide requires zoxide and fzf paths")?;
+                key_binding_zoxide = Some((PathBuf::from(zoxide), PathBuf::from(fzf)));
             } else if options && text == Some("--setup-key-binding") {
                 setup_key_binding = true;
             } else if options && matches!(text, Some("-o" | "--output")) {
@@ -167,7 +183,26 @@ impl Cli {
             }
         }
 
-        let command = if worktree_paths0 {
+        let command = if let Some((zoxide, fzf)) = key_binding_zoxide {
+            if force_resolve
+                || !targets.is_empty()
+                || worktree_paths0
+                || worktree
+                || jump
+                || format.is_some()
+                || relative
+                || resolver != ResolverOverride::Configured
+                || setup_key_binding
+                || preamp
+                || config_path.is_some()
+                || output.is_some()
+            {
+                return Err(
+                    "--internal-key-binding-zoxide cannot be combined with another mode".into(),
+                );
+            }
+            Command::KeyBindingZoxide { zoxide, fzf }
+        } else if worktree_paths0 {
             if force_resolve
                 || !targets.is_empty()
                 || worktree
@@ -524,6 +559,72 @@ mod tests {
         assert!(Cli::parse(["--worktree-paths0", "-w"].map(Into::into)).is_err());
         assert!(Cli::parse(["--worktree-paths0", "target"].map(Into::into)).is_err());
         assert!(Cli::parse(["--worktree-paths0", "--"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn parses_hidden_key_binding_zoxide_protocol() {
+        assert_eq!(
+            Cli::parse(
+                [
+                    "--internal-key-binding-zoxide",
+                    "/tools/zoxide",
+                    "/tools/fzf"
+                ]
+                .map(Into::into)
+            )
+            .unwrap()
+            .command,
+            Command::KeyBindingZoxide {
+                zoxide: "/tools/zoxide".into(),
+                fzf: "/tools/fzf".into()
+            }
+        );
+        assert!(!HELP.contains("--internal-key-binding-zoxide"));
+        for extra in [
+            "target",
+            "-w",
+            "-jw",
+            "--jump-worktree",
+            "--worktree-paths0",
+            "-z",
+            "--setup-key-binding",
+            "--preamp",
+            "--",
+        ] {
+            assert!(
+                Cli::parse(
+                    ["--internal-key-binding-zoxide", "zoxide", "fzf", extra].map(Into::into)
+                )
+                .is_err()
+            );
+        }
+        assert!(Cli::parse(["--internal-key-binding-zoxide", "zoxide"].map(Into::into)).is_err());
+        assert!(
+            Cli::parse(
+                [
+                    "--internal-key-binding-zoxide",
+                    "zoxide",
+                    "fzf",
+                    "-C",
+                    "config.toml"
+                ]
+                .map(Into::into)
+            )
+            .is_err()
+        );
+        assert!(
+            Cli::parse(
+                [
+                    "--internal-key-binding-zoxide",
+                    "zoxide",
+                    "fzf",
+                    "-o",
+                    "out"
+                ]
+                .map(Into::into)
+            )
+            .is_err()
+        );
     }
 
     #[test]
