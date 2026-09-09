@@ -104,7 +104,13 @@ fn exercise(label: &str, posix: &str, nu: &str, pwsh: &str, expected: &[&str]) {
                     if relative.is_empty() {
                         temp.path().to_string_lossy().into_owned()
                     } else {
-                        temp.path().join(relative).to_string_lossy().into_owned()
+                        relative
+                            .split('/')
+                            .fold(temp.path().to_path_buf(), |path, component| {
+                                path.join(component)
+                            })
+                            .to_string_lossy()
+                            .into_owned()
                     }
                 } else {
                     line.to_string()
