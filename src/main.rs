@@ -3,6 +3,7 @@ mod completions;
 mod config;
 mod config_init;
 mod key_history;
+mod key_zoxide;
 mod mounts;
 mod path_bytes;
 mod resolver;
@@ -95,6 +96,9 @@ fn execute(cli: Cli) -> Result<Execution, String> {
         Command::Version => Ok(Execution::stdout(
             concat!("cj ", env!("CARGO_PKG_VERSION")).into(),
         )),
+        Command::KeyBindingZoxide { zoxide, fzf } => {
+            key_zoxide::query_zoxide(&zoxide, &fzf).map(Execution::raw)
+        }
         Command::Resolve { targets, resolver } => {
             let config = config::Config::load(config_path.as_deref())?;
             let navigation = resolver::NavigationContext::from_process()?;
