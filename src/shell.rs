@@ -235,50 +235,8 @@ elif [[ -n "${{ZSH_VERSION-}}" ]]; then
     _cj_register_cd_completion
 fi"#
     );
-    Ok(match binding {
-        Some(KeyBinding::CtrlO) => format!("{wrapper}\n\n{}", render_binding(shell, &config, true)),
-        Some(KeyBinding::AltO) => format!("{wrapper}\n\n{}", render_binding(shell, &config, false)),
-        Some(KeyBinding::None) | None => wrapper,
-    })
-}
-
-fn render_binding(shell: Shell, config: &str, control: bool) -> String {
-    let command = format!("\\command cj{config} --jump-worktree");
-    match shell {
-        Shell::Bash => {
-            let key = if control { r#"\C-o"# } else { r#"\eo"# };
-            format!(
-                r#"_cj_worktree_widget() {{
-    local target
-    target="$({command})" || return
-    [[ -n "$target" ]] || return
-    \builtin cd -- "$target"
-    unset _cj_down_route
-}}
-\builtin bind -x '"{key}":_cj_worktree_widget'"#
-            )
-        }
-        Shell::Zsh => {
-            let key = if control { "^O" } else { "^[o" };
-            format!(
-                r#"_cj_worktree_widget() {{
-    local target _cj_status
-    target="$({command})"
-    _cj_status=$?
-    if (( _cj_status == 0 )) && [[ -n "$target" ]]; then
-        \builtin cd -- "$target"
-        _cj_status=$?
-        (( _cj_status == 0 )) && unset _cj_down_route
-    fi
-    \builtin zle reset-prompt
-    return "$_cj_status"
-}}
-\builtin zle -N _cj_worktree_widget
-\builtin bindkey '{key}' _cj_worktree_widget"#
-            )
-        }
-        Shell::Nu | Shell::Pwsh => unreachable!("bindings are POSIX-shell only"),
-    }
+    let widget = crate::key_bindings::render(shell, binding, settings);
+    Ok(format!("{wrapper}\n{widget}"))
 }
 
 fn render_nu(config_path: Option<&Path>, settings: &Config) -> Result<String, String> {
@@ -628,31 +586,8 @@ if (Test-Path Function:TabExpansion2) {{
     }}
 }}"#
     );
-    Ok(match binding {
-        Some(KeyBinding::CtrlO) => {
-            format!("{wrapper}\n\n{}", render_powershell_binding("Ctrl+o"))
-        }
-        Some(KeyBinding::AltO) => {
-            format!("{wrapper}\n\n{}", render_powershell_binding("Alt+o"))
-        }
-        Some(KeyBinding::None) | None => wrapper,
-    })
-}
-
-fn render_powershell_binding(chord: &str) -> String {
-    format!(
-        r#"if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {{
-    Set-PSReadLineKeyHandler -Chord '{chord}' -BriefDescription 'cj worktree' -ScriptBlock {{
-        $configArgs = $script:__cj_config
-        $executable = $script:__cj_executable.Path
-        $target = @(& $executable @configArgs --jump-worktree)
-        if (($LASTEXITCODE -eq 0) -and ($target.Count -eq 1) -and -not [string]::IsNullOrEmpty($target[0])) {{
-            Microsoft.PowerShell.Management\Set-Location -LiteralPath $target[0] -ErrorAction Stop
-            $global:__cj_down_route = $null
-        }}
-    }}
-}}"#
-    )
+    let widget = crate::key_bindings::render(Shell::Pwsh, binding, settings);
+    Ok(format!("{wrapper}\n{widget}"))
 }
 
 fn absolute(path: &Path) -> Result<std::path::PathBuf, String> {
@@ -726,12 +661,11 @@ mod tests {
             &Config::default(),
         )
         .unwrap();
-        assert!(bash.contains(r#"\builtin bind -x '"\C-o":_cj_worktree_widget'"#));
-        assert!(bash.contains("\\command cj --jump-worktree"));
+        assert!(bash.contains(r#"\builtin bind -x '"\C-o":_cj_key_widget'"#));
+        assert!(bash.contains("--internal-key-binding-zoxide"));
 
         let zsh = render(Shell::Zsh, None, Some(KeyBinding::AltO), &Config::default()).unwrap();
-        assert!(zsh.contains("\\builtin bindkey '^[o' _cj_worktree_widget"));
-        assert!(zsh.contains("\\builtin zle reset-prompt"));
+        assert!(zsh.contains("\\builtin bindkey '^[o' _cj_key_widget"));
 
         let powershell = render(
             Shell::Pwsh,
