@@ -188,7 +188,9 @@ fn render_posix(shell: Shell, chord: KeyBinding, config: &Config, history: bool)
     };
     let binding = format!("{binding}\n_cj_bound_key='{key}'\n_cj_bound_widget=_cj_key_widget");
     if shell == Shell::Bash {
-        format!("{body}\nif (( BASH_VERSINFO[0] >= 4 )); then\n    {binding}\nfi")
+        format!(
+            "{body}\nif [[ $- == *i* ]] && (( BASH_VERSINFO[0] >= 4 )); then\n    {binding}\nfi"
+        )
     } else {
         format!("{body}\n{binding}")
     }
