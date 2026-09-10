@@ -406,16 +406,20 @@ _test_complete() {
 }
 zle -C _test_complete_widget complete-word _test_complete
 zle-line-init() {
-    local flag
+    local flag before=$PWD
     local -a parsed
-    for flag in -jw --jump-worktree -jw; do
+    for flag in -jw --jump-worktree '-jw ' '--jump-worktree ' $'-jw\t' '--jump-worktree   ' -jw; do
         BUFFER="cd $flag"
         CURSOR=$#BUFFER
         # Also exercise a cursor inside the token, where SUFFIX is nonempty.
         [[ -e "$CJ_TEST_RESULTS" && "$flag" == -jw ]] && (( CURSOR-- ))
         zle _test_complete_widget
         parsed=(${(z)BUFFER})
-        printf '%s\000' "${(Q)parsed[2]}" "$PWD" >> "$CJ_TEST_RESULTS"
+        printf '%s\000' "${(Q)parsed[-1]}" "$PWD" >> "$CJ_TEST_RESULTS"
+        eval "$BUFFER" || exit 3
+        printf '%s\000' "$PWD" "${#_cj_history[@]}" >> "$CJ_TEST_RESULTS"
+        builtin cd "$before"
+        _cj_history=()
     done
     exit
 }
@@ -457,8 +461,8 @@ exit $timed_out"#,
     assert_success(&output);
     let results = fs::read(results).expect("completion widget produced results");
     let fields = nul_strings(&results);
-    assert_eq!(fields.len(), 9);
-    for result in fields.chunks_exact(3) {
+    assert_eq!(fields.len(), 35);
+    for result in fields.chunks_exact(5) {
         assert_eq!(result[0], "2", "real compadd must accept both worktrees");
         let destination = Path::new(result[1]);
         assert!(
@@ -466,6 +470,116 @@ exit $timed_out"#,
             "completion must insert one quoted worktree path, got {destination:?}"
         );
         assert_eq!(result[2], fixture.git.main_nested.to_str().unwrap());
+        assert_eq!(result[3], result[1], "Enter must execute the selected path");
+        assert_eq!(result[4], "1", "Enter must record one history departure");
+    }
+    assert!(!fixture.args.exists(), "Tab must not run cj's fzf picker");
+}
+
+#[test]
+fn generated_bash_completion_accepts_worktrees_after_whitespace_in_readline() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        assert!(env::var_os("CJ_REQUIRE_SHELLS").is_none());
+        return;
+    }
+    let bash = if Path::new("/opt/homebrew/bin/bash").exists() {
+        "/opt/homebrew/bin/bash"
+    } else {
+        "bash"
+    };
+    if !Command::new(bash)
+        .args(["-c", "(( BASH_VERSINFO[0] >= 4 ))"])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        assert!(env::var_os("CJ_REQUIRE_SHELLS").is_none());
+        return;
+    }
+    let fixture = PickerFixture::new("readline-worktree-completion-雪");
+    let init = cj(&fixture.git.main_nested, fixture.git.temp.path())
+        .arg("-C")
+        .arg(&fixture.config)
+        .args(["init", "bash"])
+        .output()
+        .unwrap();
+    assert_success(&init);
+    let script = fixture.git.temp.path().join("completion.bash");
+    let results = fixture.git.temp.path().join("completion-results");
+    let mut setup = init.stdout;
+    setup.extend_from_slice(
+        br#"
+set -o emacs
+bind '"\C-i":menu-complete'
+_test_record() {
+    printf '%s\000' "$READLINE_LINE" "$PWD" "${#_cj_history[@]}" > "$CJ_TEST_RESULTS"
+    _test_recorded=1
+}
+bind -x '"\C-g":_test_record'
+_test_after_enter() {
+    if [[ ${_test_recorded-} == 1 ]]; then
+        printf '%s\000' "$PWD" "${#_cj_history[@]}" >> "$CJ_TEST_RESULTS"
+        exit
+    fi
+}
+PROMPT_COMMAND=_test_after_enter
+PS1='CJ_WORKTREE_READY> '
+"#,
+    );
+    fs::write(&script, setup).unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cj"));
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    for input in ["cd -jw ", "cd --jump-worktree ", "cd -jw   "] {
+        let output = Command::new("zsh")
+            .args([
+                "-fc",
+                r#"zmodload zsh/zpty || exit 1
+zpty -b cj_test "$CJ_TEST_BASH" --noprofile --rcfile "$CJ_TEST_SCRIPT" -i || exit 1
+for attempt in {1..200}; do
+    if zpty -r cj_test startup; then
+        [[ "$startup" == *'CJ_WORKTREE_READY> '* ]] && break
+    fi
+    sleep 0.02
+done
+zpty -w -n cj_test "$CJ_TEST_INPUT"$'\t\x07\n'
+for attempt in {1..200}; do
+    while zpty -r cj_test output; do print -rn -- "$output"; done
+    zpty -t cj_test || break
+    sleep 0.05
+done
+timed_out=0
+zpty -t cj_test && timed_out=1
+while zpty -r cj_test output; do print -rn -- "$output"; done
+zpty -d cj_test
+exit $timed_out"#,
+            ])
+            .current_dir(&fixture.git.main_nested)
+            .env("PATH", env::join_paths(&paths).unwrap())
+            .env("TERM", "xterm")
+            .env("INPUTRC", "/dev/null")
+            .env("CJ_TEST_BASH", bash)
+            .env("CJ_TEST_SCRIPT", &script)
+            .env("CJ_TEST_RESULTS", &results)
+            .env("CJ_TEST_INPUT", input)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .output()
+            .unwrap();
+        assert_success(&output);
+        let bytes = fs::read(&results).unwrap();
+        let fields = nul_strings(&bytes);
+        assert_eq!(fields.len(), 5, "{input}: {fields:?}");
+        assert!(fields[0].starts_with(input));
+        assert_eq!(fields[1], fixture.git.main_nested.to_str().unwrap());
+        assert_eq!(fields[2], "0", "Tab must not consume history");
+        let destination = Path::new(fields[3]);
+        assert!(
+            destination == fixture.git.main || destination == fixture.git.linked,
+            "{input}: {fields:?}; {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(fields[4], "1", "Enter must record one departure");
     }
     assert!(!fixture.args.exists(), "Tab must not run cj's fzf picker");
 }

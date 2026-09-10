@@ -163,18 +163,21 @@ Choose a worktree with Tab completion:
 
 ```console
 cd -jw<Tab>            # complete a worktree path, then press Enter
+cd -jw <Tab>           # a space before Tab also works
 cd --jump-worktree<Tab> # long form of the same completion trigger
 ```
 
 `cj -w/--worktree` lists worktrees. The `cd` completion requires the generated
 shell integration so the parent shell can perform the directory change.
 In Bash, Zsh, Nushell, and PowerShell, pressing Tab
-immediately after `-jw` or `--jump-worktree` offers only this repository's
-worktree paths through the shell's native completion system. A completion frontend
+after `-jw` or `--jump-worktree`, with or without trailing whitespace, offers only
+this repository's worktree paths through the shell's native completion system. A completion frontend
 such as fzf-tab may render those candidates with fzf, but cj does not launch a
 nested picker during completion and works without fzf. Choosing a candidate only
-inserts its path; press Enter to change directory. Pressing Enter while the jump
-token is still present shows a reminder to use Tab and leaves the directory unchanged.
+inserts its path; press Enter to change directory. After whitespace, Bash, Zsh,
+and Nushell keep the flag and complete its literal destination argument; PowerShell
+replaces the flag and whitespace together. Pressing Enter with a jump flag but
+no destination shows a reminder to use Tab and leaves the directory unchanged.
 
 The standalone `cj -jw` / `cj --jump-worktree` command remains available to print
 a worktree path selected through fzf.
