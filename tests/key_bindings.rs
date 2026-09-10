@@ -458,13 +458,42 @@ Invoke-CjKeyWidget
     }
 }
 
-#[test]
-fn sourcing_again_updates_only_the_binding_owned_by_cj() {
-    let bash = if Path::new("/opt/homebrew/bin/bash").exists() {
+fn bash_program() -> &'static str {
+    if Path::new("/opt/homebrew/bin/bash").exists() {
         "/opt/homebrew/bin/bash"
     } else {
         "bash"
-    };
+    }
+}
+
+#[test]
+fn default_init_is_quiet_in_noninteractive_bash() {
+    let temp = TempDir::new("noninteractive-init");
+    let generated = cj(temp.path(), temp.path())
+        .args(["init", "bash"])
+        .output()
+        .unwrap();
+    assert_success(&generated);
+    let source = String::from_utf8(generated.stdout).unwrap();
+    let output = Command::new(bash_program())
+        .args(["--noprofile", "--norc", "-c"])
+        .arg(format!(
+            "{source}\n{source}\ndeclare -F cd _cj_key_widget >/dev/null && [[ -z ${{_cj_bound_key-}} ]]"
+        ))
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert!(output.stdout.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn sourcing_again_updates_only_the_binding_owned_by_cj() {
+    let bash = bash_program();
     for (shell, executable) in [("bash", bash), ("zsh", "zsh")] {
         if Command::new(executable).arg("--version").output().is_err() {
             continue;
@@ -499,7 +528,11 @@ fn sourcing_again_updates_only_the_binding_owned_by_cj() {
         };
         let script = fixture.temp.path().join("reload.sh");
         fs::write(&script, format!("{first}\n{second}\n{query}\nprintf '\\0'\n{disabled}\n{query}\nprintf '\\0'\n{first}\n{replace}\n{disabled}\n{query_user}\n")).unwrap();
-        let output = Command::new(executable).arg(&script).output().unwrap();
+        let mut command = Command::new(executable);
+        if shell == "bash" {
+            command.args(["--noprofile", "--norc", "-i"]);
+        }
+        let output = command.arg(&script).output().unwrap();
         assert_success(&output);
         let sections = fields(&output);
         assert!(
