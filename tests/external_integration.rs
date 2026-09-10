@@ -381,6 +381,72 @@ fn generated_posix_tab_completion_offers_native_worktree_candidates() {
 }
 
 #[test]
+fn zsh_worktree_display_shortens_home_without_changing_destinations() {
+    if Command::new("zsh").arg("--version").output().is_err() {
+        assert!(env::var_os("CJ_REQUIRE_SHELLS").is_none());
+        return;
+    }
+    let fixture = PickerFixture::new("worktree-home-labels-雪");
+    let init = cj(&fixture.git.main_nested, fixture.git.temp.path())
+        .arg("-C")
+        .arg(&fixture.config)
+        .args(["init", "zsh"])
+        .output()
+        .unwrap();
+    assert_success(&init);
+    let binary = Path::new(env!("CARGO_BIN_EXE_cj"));
+    let mut paths = vec![binary.parent().unwrap().to_owned()];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let main = fixture.git.main.to_str().unwrap();
+    let linked = fixture.git.linked.to_str().unwrap();
+    let parent = fixture.git.main.parent().unwrap().to_str().unwrap();
+    for (home, labels) in [
+        (parent.to_owned(), ["~/main repo", "~/feature's worktree"]),
+        (
+            format!("{parent}/"),
+            ["~/main repo", "~/feature's worktree"],
+        ),
+        (main.to_owned(), ["~", linked]),
+        (format!("{parent}/main"), [main, linked]),
+        (String::new(), [main, linked]),
+    ] {
+        let output = shell_with_setup(
+            "zsh",
+            &init.stdout,
+            r#"eval "$1"
+typeset -A compstate
+typeset -ga words=(cd -jw '')
+integer CURRENT=3
+compadd() {
+    [[ $1 == -f && $2 == -d ]] || return 1
+    local label_array=$3
+    local -a labels=("${(@P)label_array}")
+    shift 3
+    [[ $1 == -- ]] || return 1
+    shift
+    local i=1 candidate
+    for candidate in "$@"; do
+        printf '%s\000' "$labels[i]" "$candidate"
+        (( i++ ))
+    done
+}
+_cj_complete_cd"#,
+        )
+        .current_dir(&fixture.git.main_nested)
+        .env("PATH", env::join_paths(&paths).unwrap())
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+        assert_success(&output);
+        assert_eq!(
+            nul_strings(&output.stdout),
+            [labels[0], main, labels[1], linked],
+            "HOME={home:?}"
+        );
+    }
+}
+
+#[test]
 fn generated_zsh_completion_replaces_jump_tokens_in_real_zle() {
     if Command::new("zsh").arg("--version").output().is_err() {
         return;
@@ -453,6 +519,7 @@ exit $timed_out"#,
         .env("TERM", "xterm")
         .env("CJ_TEST_SCRIPT", &script)
         .env("CJ_TEST_RESULTS", &results)
+        .env("HOME", fixture.git.main.parent().unwrap())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_COMMON_DIR")
