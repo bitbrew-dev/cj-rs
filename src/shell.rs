@@ -181,7 +181,7 @@ function cd() {{
 
 function _cj_complete_cd() {{
     local current candidate
-    local -a destinations candidates
+    local -a destinations candidates display_paths
     destinations=({destinations})
 
     if [[ -n "${{BASH_VERSION-}}" ]]; then
@@ -214,15 +214,25 @@ function _cj_complete_cd() {{
     if {{ (( CURRENT == 2 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; }} ||
         {{ (( CURRENT == 3 )) && [[ "${{words[2]}}" == -jw || "${{words[2]}}" == --jump-worktree ]]; }}; then
         candidates=()
+        display_paths=()
+        local _cj_display_home="${{HOME-}}"
+        _cj_display_home="${{_cj_display_home%/}}"
         while IFS= read -r -d '' candidate; do
             candidates+=("$candidate")
+            if [[ -n "$_cj_display_home" && "$candidate" == "$_cj_display_home" ]]; then
+                display_paths+=('~')
+            elif [[ -n "$_cj_display_home" && "$candidate" == "$_cj_display_home/"* ]]; then
+                display_paths+=("~${{candidate#"$_cj_display_home"}}")
+            else
+                display_paths+=("$candidate")
+            fi
         done < <(\command cj{config} --worktree-paths0 2>/dev/null)
         (( ${{#candidates[@]}} )) || return 0
         # Replace the jump token instead of matching paths against it.
         if (( CURRENT == 2 )); then PREFIX='' SUFFIX=''; fi
         # Offer complete destinations instead of inserting their common parent.
         compstate[insert]=menu
-        compadd -f -- "${{candidates[@]}}"
+        compadd -f -d display_paths -- "${{candidates[@]}}"
         return
     fi
 
@@ -720,7 +730,7 @@ mod tests {
 
         let zsh = render(Shell::Zsh, None, None, &Config::default()).unwrap();
         assert!(zsh.contains("(( CURRENT == 2 ))"));
-        assert!(zsh.contains("compadd -f -- \"${candidates[@]}\""));
+        assert!(zsh.contains("compadd -f -d display_paths -- \"${candidates[@]}\""));
         assert!(zsh.contains("_cj_cd_completion_fallback"));
         assert!(zsh.contains("compdef _cj_complete_cd cd"));
         assert!(zsh.contains("add-zsh-hook precmd _cj_register_cd_completion"));

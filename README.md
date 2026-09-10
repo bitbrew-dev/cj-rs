@@ -178,6 +178,8 @@ inserts its path; press Enter to change directory. After whitespace, Bash, Zsh,
 and Nushell keep the flag and complete its literal destination argument; PowerShell
 replaces the flag and whitespace together. Pressing Enter with a jump flag but
 no destination shows a reminder to use Tab and leaves the directory unchanged.
+Zsh completion menus, including fzf-tab, display paths under `$HOME` as `~/…`;
+the inserted destination and preview path remain absolute.
 
 The standalone `cj -jw` / `cj --jump-worktree` command remains available to print
 a worktree path selected through fzf.
