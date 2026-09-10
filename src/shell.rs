@@ -116,6 +116,10 @@ function cd() {{
             _cj_nav_arg=
             ;;
         -jw|--jump-worktree)
+            if [[ $# -eq 2 && -n "$2" ]]; then
+                _cj_builtin_cd -- "$2"
+                return
+            fi
             printf '%s\n' 'cj: type cd -jw and press Tab to select a worktree' >&2
             return 2
             ;;
@@ -182,9 +186,11 @@ function _cj_complete_cd() {{
 
     if [[ -n "${{BASH_VERSION-}}" ]]; then
         current="${{COMP_WORDS[COMP_CWORD]}}"
-        if (( COMP_CWORD == 1 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
+        if {{ (( COMP_CWORD == 1 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; }} ||
+            {{ (( COMP_CWORD == 2 )) && [[ "${{COMP_WORDS[1]}}" == -jw || "${{COMP_WORDS[1]}}" == --jump-worktree ]]; }}; then
             COMPREPLY=()
             while IFS= read -r -d '' candidate; do
+                (( COMP_CWORD == 1 )) || [[ "$candidate" == "$current"* ]] || continue
                 COMPREPLY+=("$candidate")
             done < <(\command cj{config} --worktree-paths0 2>/dev/null)
             compopt -o filenames 2>/dev/null || :
@@ -205,14 +211,15 @@ function _cj_complete_cd() {{
     fi
 
     current="${{words[CURRENT]}}"
-    if (( CURRENT == 2 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; then
+    if {{ (( CURRENT == 2 )) && [[ "$current" == -jw || "$current" == --jump-worktree ]]; }} ||
+        {{ (( CURRENT == 3 )) && [[ "${{words[2]}}" == -jw || "${{words[2]}}" == --jump-worktree ]]; }}; then
         candidates=()
         while IFS= read -r -d '' candidate; do
             candidates+=("$candidate")
         done < <(\command cj{config} --worktree-paths0 2>/dev/null)
         (( ${{#candidates[@]}} )) || return 0
         # Replace the jump token instead of matching paths against it.
-        PREFIX='' SUFFIX=''
+        if (( CURRENT == 2 )); then PREFIX='' SUFFIX=''; fi
         # Offer complete destinations instead of inserting their common parent.
         compstate[insert]=menu
         compadd -f -- "${{candidates[@]}}"
@@ -287,13 +294,20 @@ def --env _cj-record-move [before: string, mode: string = 'other', logical: stri
 
 def _cj-complete-cd [spans: list<string>] {{
     let current = ($spans | last)
-    if (($spans | length) == 2) and ($current in ['-jw' '--jump-worktree']) {{
+    let attached = (($spans | length) == 2) and ($current in ['-jw' '--jump-worktree'])
+    let separated = (($spans | length) == 3) and ($spans.1 in ['-jw' '--jump-worktree'])
+    if $attached or $separated {{
+        let prefix = if $separated {{
+            try {{ $current | from nuon | into string }} catch {{
+                $current | str trim --char '`' | str trim --char '"' | str trim --char "'"
+            }}
+        }} else {{ '' }}
         let config = {config}
         let result = (^cj ...$config --worktree --format json | complete)
         if $result.exit_code != 0 {{ return [] }}
         return (try {{
-            $result.stdout | from json | each {{ |row|
-                {{ value: $row.path, description: 'Git worktree' }}
+            $result.stdout | from json | where {{ |row| $row.path | str starts-with $prefix }} | each {{ |row|
+                {{ value: ($row.path | to nuon), description: 'Git worktree' }}
             }}
         }} catch {{ [] }})
     }}
@@ -319,7 +333,12 @@ export def --env --wrapped __cj_cd [...args: string] {{
     }}
 
     if ($args.0 in ['-jw' '--jump-worktree']) {{
-        error make {{ msg: 'cj: type cd -jw and press Tab to select a worktree' }}
+        if (($args | length) != 2) or ($args.1 | is-empty) {{
+            error make {{ msg: 'cj: type cd -jw and press Tab to select a worktree' }}
+        }}
+        cd $args.1
+        _cj-record-move $before
+        return
     }}
 
     if (($args.0 == '-r') or ($args.0 == '--raw')) {{
@@ -489,7 +508,10 @@ function global:cd {{
     $first = [string]$cjArgs[0]
 
     if (($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{
-        throw 'cj: type cd -jw and press Tab to select a worktree'
+        if ($cjArgs.Count -ne 2 -or [string]::IsNullOrEmpty([string]$cjArgs[1])) {{ throw 'cj: type cd -jw and press Tab to select a worktree' }}
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[1] -ErrorAction Stop
+        Add-CjHistory $before
+        return
     }}
 
     if (($first -ceq '-r') -or ($first -ceq '--raw')) {{
@@ -570,7 +592,7 @@ if (Test-Path Function:TabExpansion2) {{
 
         if ($PSCmdlet.ParameterSetName -ceq 'ScriptInputSet') {{
             $beforeCursor = $inputScript.Substring(0, $cursorColumn)
-            $jump = [regex]::Match($beforeCursor, '^\s*cd\s+(?<flag>-jw|--jump-worktree)$')
+            $jump = [regex]::Match($beforeCursor, '^\s*cd\s+(?<flag>-jw|--jump-worktree)[ \t]*$')
             if ($jump.Success) {{
                 $matches = @(Complete-CjCdArgument $jump.Groups['flag'].Value)
                 $results = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
@@ -579,7 +601,7 @@ if (Test-Path Function:TabExpansion2) {{
                     $results,
                     -1,
                     $jump.Groups['flag'].Index,
-                    $jump.Groups['flag'].Length
+                    ($cursorColumn - $jump.Groups['flag'].Index)
                 )
             }}
         }}
