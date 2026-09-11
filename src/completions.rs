@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::cli::Shell;
 use crate::config::Config;
+use crate::powershell::quote as quote_ps;
 
 const FLAGS: &[&str] = &[
     "-C",
@@ -401,7 +402,7 @@ fn powershell(destinations: &[String]) -> String {
     }}
 
     $candidates | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{
-        $completionText = if ($_ -match '[^\p{{L}}\p{{N}}_./:\\-]') {{ "'" + $_.Replace("'", "''") + "'" }} else {{ $_ }}
+        $completionText = if ($_ -match '[^\p{{L}}\p{{N}}_./:\\-]') {{ "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_) + "'" }} else {{ $_ }}
         [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
     }}
 }}"#
@@ -449,10 +450,6 @@ fn quote_nu(value: &str) -> String {
         }
     }
     unreachable!()
-}
-
-fn quote_ps(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(test)]

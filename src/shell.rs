@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::cli::Shell;
 use crate::config::{Config, KeyBinding};
+use crate::powershell::quote as quote_powershell;
 
 pub fn render(
     shell: Shell,
@@ -488,7 +489,7 @@ function script:Add-CjHistory {{
 
 function script:ConvertTo-CjCompletionText {{
     param([string]$Value)
-    return "'" + $Value.Replace("'", "''") + "'"
+    return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
 }}
 
 function script:Complete-CjCdArgument {{
@@ -662,10 +663,6 @@ fn quote_nu(value: &str) -> String {
         }
     }
     unreachable!()
-}
-
-fn quote_powershell(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(test)]

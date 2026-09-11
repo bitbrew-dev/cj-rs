@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use support::{TempDir, assert_success, cj};
+use support::{GitFixture, TempDir, assert_success, cj};
 
 #[test]
 fn generated_sources_parse_in_available_shells() {
@@ -314,6 +314,129 @@ if (Get-Command Get-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
         String::from_utf8(output.stdout).unwrap(),
         root.join("one").to_string_lossy()
     );
+}
+
+#[test]
+fn powershell_smart_quotes_round_trip_in_source_and_completions() {
+    if !available("pwsh") {
+        eprintln!("skipping PowerShell smart quote test: pwsh is unavailable");
+        return;
+    }
+    let fixture = GitFixture::new("powershell-smart-quotes");
+    let temp = &fixture.temp;
+    let worktree = temp.path().join("worktree's ‘left’ ‚low‛");
+    assert_success(
+        &Command::new("git")
+            .current_dir(&fixture.main)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .args(["worktree", "move"])
+            .arg(&fixture.linked)
+            .arg(&worktree)
+            .output()
+            .unwrap(),
+    );
+    let destination = temp.path().join("target's ‘left’ ‚low‛ 雪");
+    let config = temp.path().join("config's ‘left’ ‚low‛.toml");
+    fs::create_dir_all(&destination).unwrap();
+    let mut aliases = vec!["it’s-here".to_string()];
+    for (index, quote) in ['\'', '‘', '’', '‚', '‛'].into_iter().enumerate() {
+        aliases.push(format!(
+            "quote{index}{quote}; $global:CjInjected=1; #{quote}"
+        ));
+    }
+    let mut contents = String::from("[aliases]\n");
+    for name in &aliases {
+        contents.push_str(&format!(
+            "{} = \"{}\"\n",
+            serde_json::to_string(name).unwrap(),
+            toml_string(&destination)
+        ));
+    }
+    fs::write(&config, contents).unwrap();
+    let integration = temp.path().join("init.ps1");
+    let completions = temp.path().join("completions.ps1");
+    fs::write(
+        &integration,
+        generate(temp.path(), &config, "init", "powershell"),
+    )
+    .unwrap();
+    fs::write(
+        &completions,
+        generate(temp.path(), &config, "completions", "powershell"),
+    )
+    .unwrap();
+
+    let script = r#"$ErrorActionPreference = 'Stop'
+$global:CjInjected = 0
+function Test-SameDirectory([string]$Actual, [string]$Expected) {
+    # Git uses '/', while Windows PathBuf and Get-Location use '\'.
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    return [System.IO.Path]::GetFullPath($Actual).Equals([System.IO.Path]::GetFullPath($Expected), $comparison)
+}
+. $env:CJ_INIT_SOURCE
+. $env:CJ_COMPLETION_SOURCE
+if ($script:__cj_config[1] -cne $env:CJ_TEST_CONFIG) { throw 'config path changed' }
+$line = 'cd -jw'
+$before = (Get-Location).ProviderPath
+$result = TabExpansion2 $line $line.Length
+$match = @($result.CompletionMatches | Where-Object { Test-SameDirectory $_.ListItemText $env:CJ_TEST_WORKTREE })
+if ($match.Count -ne 1) { throw "missing smart-quote worktree completion: expected $env:CJ_TEST_WORKTREE; got $($result.CompletionMatches.ListItemText -join ', ')" }
+if ((Get-Location).ProviderPath -cne $before) { throw 'Tab changed directory' }
+$literalPath = & ([scriptblock]::Create($match[0].CompletionText))
+if ($literalPath -isnot [string] -or $literalPath -cne $match[0].ListItemText) { throw 'completion changed literal worktree path' }
+$completed = $line.Remove($result.ReplacementIndex, $result.ReplacementLength).Insert($result.ReplacementIndex, $match[0].CompletionText)
+& ([scriptblock]::Create($completed))
+if (-not (Test-SameDirectory (Get-Location).ProviderPath $env:CJ_TEST_WORKTREE)) { throw 'completed worktree path changed' }
+$aliases = @($env:CJ_TEST_ALIASES | ConvertFrom-Json)
+foreach ($command in @('cj', 'cd')) {
+    foreach ($expected in $aliases) {
+        $line = $command + ' ' + $expected.Substring(0, 2)
+        $candidates = if ($command -ceq 'cd') {
+            Complete-CjCdArgument $expected.Substring(0, 2)
+        } else {
+            [System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches
+        }
+        $matches = @($candidates | Where-Object ListItemText -CEQ $expected)
+        if ($matches.Count -ne 1) { throw "missing $command completion: $expected" }
+        $literal = $matches[0].CompletionText
+        $value = & ([scriptblock]::Create($literal))
+        if ($value -isnot [string] -or $value -cne $expected) { throw "completion changed: $expected" }
+        if ($command -ceq 'cd') {
+            & ([scriptblock]::Create('cd ' + $literal))
+            if (-not (Test-SameDirectory (Get-Location).ProviderPath $env:CJ_TEST_DESTINATION)) { throw 'completed alias failed to resolve' }
+        }
+        if ($global:CjInjected -ne 0) { throw 'completion executed embedded code' }
+    }
+}
+if ($global:CjInjected -ne 0) { throw 'generated source executed embedded code' }
+"#;
+    let output = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .current_dir(&fixture.main)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env("PATH", path_with_cj())
+        .env("HOME", temp.path())
+        .env("CJ_INIT_SOURCE", &integration)
+        .env("CJ_COMPLETION_SOURCE", &completions)
+        .env("CJ_TEST_CONFIG", &config)
+        .env("CJ_TEST_WORKTREE", &worktree)
+        .env("CJ_TEST_ALIASES", serde_json::to_string(&aliases).unwrap())
+        .env("CJ_TEST_DESTINATION", &destination)
+        .output()
+        .unwrap();
+    assert_success(&output);
 }
 
 #[cfg(unix)]
