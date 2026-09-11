@@ -4,7 +4,15 @@ use std::io::{self, Read, Write};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let tool = env::var("CJ_FAKE_TOOL").unwrap_or_default();
+    let tool = env::var("CJ_FAKE_TOOL").unwrap_or_else(|_| {
+        env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
+    });
     let mode = env::var("CJ_FAKE_MODE").unwrap_or_default();
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(path) = env::var_os("CJ_FAKE_ARGS") {
@@ -17,6 +25,13 @@ fn main() -> ExitCode {
         }
     }
     match (tool.as_str(), mode.as_str()) {
+        ("git", _) => {
+            let path = env::var_os("CJ_FAKE_WORKTREE_LIST").expect("CJ_FAKE_WORKTREE_LIST");
+            io::stdout()
+                .write_all(&fs::read(path).expect("read fake worktree list"))
+                .expect("write fake worktree list");
+            ExitCode::SUCCESS
+        }
         ("zoxide", "success") => {
             println!("{}", env::var("CJ_FAKE_DEST").expect("CJ_FAKE_DEST"));
             ExitCode::SUCCESS
@@ -30,6 +45,10 @@ fn main() -> ExitCode {
             let index = env::var("CJ_FAKE_SELECTION").expect("CJ_FAKE_SELECTION");
             print!("{index}\tselected\0");
             ExitCode::SUCCESS
+        }
+        ("fzf", "no-match") => {
+            record_stdin();
+            ExitCode::from(1)
         }
         ("fzf", "cancel") => {
             record_stdin();
