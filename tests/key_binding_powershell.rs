@@ -25,8 +25,8 @@ fn real_psreadline_keypresses_preserve_buffers_history_and_cwd() {
         ("'zoxide', 'cj'", "0", "", 3),
     ] {
         let temp = TempDir::new("psreadline-雪");
-        let zoxide = temp.path().join("custom zoxide's executable");
-        let fzf = temp.path().join("custom fzf's executable");
+        let zoxide = temp.path().join("custom zoxide's ‘left’ ‚low‛ executable");
+        let fzf = temp.path().join("custom fzf's ‘left’ ‚low‛ executable");
         write_executable(
             &zoxide,
             r#"
@@ -47,7 +47,7 @@ if [ "$CJ_TEST_PICK_STATUS" = 7 ]; then echo 'picker exploded' >&2; fi
 exit "$CJ_TEST_PICK_STATUS"
 "#,
         );
-        let config = temp.path().join("config.toml");
+        let config = temp.path().join("config's ‘left’ ‚low‛.toml");
         fs::write(&config, format!(
             "[programs]\nzoxide = {}\nfzf = {}\n[key-bindings]\nmacos = {{ key = 'ctrl-o', behaviors = [{behaviors}] }}\nlinux = {{ key = 'ctrl-o', behaviors = [{behaviors}] }}\n",
             serde_json::to_string(zoxide.to_str().unwrap()).unwrap(),
@@ -100,7 +100,7 @@ exec "$CJ_TEST_PWSH" -NoLogo -NoProfile -NoExit -File "$CJ_TEST_SCRIPT"
         let results = temp.path().join("results.jsonl");
         let older = temp.path().join("older 'quoted' 雪");
         let newer = temp.path().join("-newer folder");
-        let target = "/selected 'quote' 雪/‘’/$literal;$(no-execution)\nlast\n\n";
+        let target = "/selected 'quote' 雪/‘’‚‛/$literal;$(no-execution)\nlast\n\n";
         let binary = PathBuf::from(env!("CARGO_BIN_EXE_cj"));
         let mut paths = vec![binary.parent().unwrap().to_path_buf()];
         paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
@@ -177,6 +177,8 @@ exit $timed_out
                         path.replace('\'', "''")
                             .replace('‘', "‘‘")
                             .replace('’', "’’")
+                            .replace('‚', "‚‚")
+                            .replace('‛', "‛‛")
                     )
                 },
             );

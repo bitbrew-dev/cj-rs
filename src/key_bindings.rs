@@ -1,6 +1,7 @@
 //! Foreground line-editor widgets for ordered directory completion.
 use crate::cli::Shell;
 use crate::config::{Config, KeyBinding, KeyBindingBehavior};
+use crate::powershell::quote as quote_powershell;
 
 pub fn render(shell: Shell, chord: Option<KeyBinding>, config: &Config) -> String {
     let cleanup = cleanup(shell);
@@ -197,9 +198,8 @@ fn render_posix(shell: Shell, chord: KeyBinding, config: &Config, history: bool)
 }
 
 fn render_powershell(chord: KeyBinding, config: &Config, history: bool) -> String {
-    let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
-    let zoxide = quote(&config.programs.zoxide.to_string_lossy());
-    let fzf = quote(&config.programs.fzf.to_string_lossy());
+    let zoxide = quote_powershell(&config.programs.zoxide.to_string_lossy());
+    let fzf = quote_powershell(&config.programs.fzf.to_string_lossy());
     let behaviors = config
         .key_binding_behaviors()
         .iter()

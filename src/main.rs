@@ -8,6 +8,7 @@ mod key_history;
 mod key_zoxide;
 mod mounts;
 mod path_bytes;
+mod powershell;
 mod resolver;
 mod shell;
 #[cfg(windows)]
