@@ -94,6 +94,34 @@ impl Fixture {
 }
 
 #[test]
+fn completions_accept_documented_and_legacy_onedrive_configs() {
+    let temp = TempDir::new("onedrive-config");
+    let config = temp.path().join("config.toml");
+    for provider in ["onedrive", "one-drive"] {
+        fs::write(
+            &config,
+            format!(
+                "[mounts]\nonedrive-work = {{ provider = \"{provider}\", account = \"business\" }}\n"
+            ),
+        )
+        .unwrap();
+        let output = cj(temp.path(), temp.path())
+            .arg("-C")
+            .arg(&config)
+            .args(["completions", "bash"])
+            .output()
+            .unwrap();
+        assert_success(&output);
+        assert!(output.stderr.is_empty());
+        assert!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("'onedrive-work'")
+        );
+    }
+}
+
+#[test]
 fn resolves_aliases_and_explicit_mounts_with_resolver_controls() {
     let fixture = Fixture::new("configured-destinations");
 

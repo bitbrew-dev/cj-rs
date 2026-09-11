@@ -104,6 +104,7 @@ pub struct MountSpec {
 pub enum MountProvider {
     Icloud,
     GoogleDrive,
+    #[serde(rename = "onedrive", alias = "one-drive")]
     OneDrive,
 }
 
@@ -811,5 +812,33 @@ windows = "none"
         assert!(encoded.contains("provider = \"icloud\""));
         let decoded: Config = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded, config);
+    }
+
+    #[test]
+    fn onedrive_accepts_legacy_spelling_and_serializes_canonical_name() {
+        for provider in ["onedrive", "one-drive"] {
+            let config: Config = toml::from_str(&format!(
+                "[mounts.work]\nprovider = \"{provider}\"\naccount = \"business\"\n"
+            ))
+            .unwrap();
+            assert_eq!(config.validate(), Ok(()));
+            assert_eq!(
+                config.mounts["work"].provider,
+                Some(MountProvider::OneDrive)
+            );
+            assert_eq!(
+                config.mounts["work"].account,
+                Some(OneDriveAccount::Business)
+            );
+
+            let encoded = toml::to_string_pretty(&config).unwrap();
+            let document: toml::Value = toml::from_str(&encoded).unwrap();
+            assert_eq!(
+                document["mounts"]["work"]["provider"].as_str(),
+                Some("onedrive")
+            );
+            let decoded: Config = toml::from_str(&encoded).unwrap();
+            assert_eq!(decoded, config);
+        }
     }
 }
