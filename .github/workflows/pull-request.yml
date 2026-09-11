@@ -43,6 +43,7 @@ jobs:
             tests:
               - src/**/*.rs
               - tests/**/*.rs
+              - tests/**/*.py
               - .github/workflows/*.yml
               - Cargo.toml
               - Cargo.lock
