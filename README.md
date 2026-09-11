@@ -5,6 +5,10 @@ named aliases and mounts, Git-aware shortcuts, optional zoxide resolution, and a
 fzf worktree jump while leaving the final directory change to your shell's real
 `cd` builtin.
 
+Starting with 1.0.0, documented commands, configuration, shell behavior, and JSON
+output follow the [v1 compatibility contract](docs/compatibility.md). That contract
+also describes how to upgrade generated shell integration and consume output in scripts.
+
 ## Install
 
 ### Homebrew
