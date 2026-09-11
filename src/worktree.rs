@@ -98,12 +98,12 @@ pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, Strin
                 format!("cannot run fzf: {error}")
             }
         })?;
-    child
-        .stdin
-        .take()
-        .ok_or("cannot open fzf input")?
-        .write_all(&input)
-        .map_err(|error| format!("cannot write fzf input: {error}"))?;
+    // The picker may cancel or accept before consuming the complete list.
+    // Close stdin and reap it even when writing encounters a broken pipe.
+    let input_result = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(&input),
+        None => Err(std::io::Error::other("cannot open fzf input")),
+    };
 
     let output = child
         .wait_with_output()
@@ -113,6 +113,11 @@ pub fn pick(worktrees: &[Worktree], fzf: &Path) -> Result<Option<PathBuf>, Strin
     }
     if !output.status.success() {
         return Err(format!("fzf exited with {}", output.status));
+    }
+    if let Err(error) = input_result
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(format!("cannot write fzf input: {error}"));
     }
     selected_path(worktrees, &output.stdout).map(Some)
 }
