@@ -123,11 +123,18 @@ function cd() {{
             _cj_nav_arg=
             ;;
         -jw|--jump-worktree)
+            if [[ $# -eq 1 ]]; then
+                target="$(\command cj --internal-main-worktree && printf .)" || return
+                target="${{target%$'\n.'}}"
+                [[ -n "$target" ]] || return 1
+                _cj_builtin_cd -- "$target"
+                return
+            fi
             if [[ $# -eq 2 && -n "$2" ]]; then
                 _cj_builtin_cd -- "$2"
                 return
             fi
-            printf '%s\n' 'cj: type cd -jw and press Tab to select a worktree' >&2
+            printf '%s\n' 'cj: --jump-worktree accepts at most one non-empty destination' >&2
             return 2
             ;;
         -Z|--no-zoxide)
@@ -373,10 +380,21 @@ export def --env --wrapped __cj_cd [...args: string] {{
     }}
 
     if ($args.0 in ['-jw' '--jump-worktree']) {{
-        if (($args | length) != 2) or ($args.1 | is-empty) {{
-            error make {{ msg: 'cj: type cd -jw and press Tab to select a worktree' }}
+        let target = if ($args | length) == 1 {{
+            let result = (^cj --internal-main-worktree | complete)
+            if $result.exit_code != 0 {{
+                if not ($result.stderr | is-empty) {{ print --stderr --no-newline $result.stderr }}
+                error make {{ msg: $'cj exited with status ($result.exit_code)' }}
+            }}
+            let path = ($result.stdout | str replace --regex '\n$' '')
+            if ($path | is-empty) {{ error make {{ msg: 'cj returned an empty destination' }} }}
+            $path
+        }} else if (($args | length) == 2) and (not ($args.1 | is-empty)) {{
+            $args.1
+        }} else {{
+            error make {{ msg: 'cj: --jump-worktree accepts at most one non-empty destination' }}
         }}
-        cd $args.1
+        cd $target
         _cj-record-move $before
         return
     }}
@@ -548,8 +566,19 @@ function global:cd {{
     $first = [string]$cjArgs[0]
 
     if (($first -ceq '-jw') -or ($first -ceq '--jump-worktree')) {{
-        if ($cjArgs.Count -ne 2 -or [string]::IsNullOrEmpty([string]$cjArgs[1])) {{ throw 'cj: type cd -jw and press Tab to select a worktree' }}
-        Microsoft.PowerShell.Management\Set-Location -LiteralPath $cjArgs[1] -ErrorAction Stop
+        if ($cjArgs.Count -eq 1) {{
+            $executable = $script:__cj_executable.Path
+            $target = @(& $executable --internal-main-worktree)
+            $status = $LASTEXITCODE
+            if ($status -ne 0) {{ throw "cj exited with status $status" }}
+            if ($target.Count -ne 1 -or [string]::IsNullOrEmpty($target[0])) {{ throw 'cj returned an invalid destination' }}
+            $destination = $target[0]
+        }} elseif ($cjArgs.Count -eq 2 -and -not [string]::IsNullOrEmpty([string]$cjArgs[1])) {{
+            $destination = $cjArgs[1]
+        }} else {{
+            throw 'cj: --jump-worktree accepts at most one non-empty destination'
+        }}
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $destination -ErrorAction Stop
         Add-CjHistory $before
         return
     }}
@@ -739,10 +768,11 @@ mod tests {
     }
 
     #[test]
-    fn wrappers_explain_that_jump_tokens_require_tab() {
+    fn wrappers_resolve_bare_jump_tokens_and_validate_selected_targets() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Nu, Shell::Pwsh] {
             let source = render(shell, None, None, &Config::default()).unwrap();
-            assert!(source.contains("type cd -jw and press Tab to select a worktree"));
+            assert!(source.contains("--internal-main-worktree"));
+            assert!(source.contains("--jump-worktree accepts at most one non-empty destination"));
         }
     }
 

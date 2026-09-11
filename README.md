@@ -159,9 +159,10 @@ cj -w --format json
 cj -w --relative
 ```
 
-Choose a worktree with Tab completion:
+Jump to the main worktree with Enter, or choose a worktree with Tab completion:
 
 ```console
+cd -jw<Enter>          # jump directly to the main worktree
 cd -jw<Tab>            # complete a worktree path, then press Enter
 cd -jw <Tab>           # a space before Tab also works
 cd --jump-worktree<Tab> # long form of the same completion trigger
@@ -176,8 +177,16 @@ such as fzf-tab may render those candidates with fzf, but cj does not launch a
 nested picker during completion and works without fzf. Choosing a candidate only
 inserts its path; press Enter to change directory. After whitespace, Bash, Zsh,
 and Nushell keep the flag and complete its literal destination argument; PowerShell
-replaces the flag and whitespace together. Pressing Enter with a jump flag but
-no destination shows a reminder to use Tab and leaves the directory unchanged.
+replaces the flag and whitespace together.
+
+Pressing Enter on bare `cd -jw` or `cd --jump-worktree` jumps directly to the
+primary worktree, whichever branch it currently has checked out. This shortcut
+is independent of configured keyword names and local directories named `origin`
+or `og`; it does not switch branches or launch fzf. A successful move records one
+history entry, so `cd v` returns to the previous directory. Already at the primary
+root is a no-op; outside a Git repository, the command reports an error and leaves
+the directory and history unchanged. Trailing spaces before Enter behave the same.
+
 Zsh completion menus, including fzf-tab, display paths under `$HOME` as `~/…`;
 the inserted destination and preview path remain absolute.
 

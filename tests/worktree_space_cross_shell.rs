@@ -56,7 +56,8 @@ fn command(fixture: &GitFixture, shell: &str) -> Command {
         .env("CJ_EXPECTED", &fixture.linked)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR");
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE");
     command
 }
 
@@ -104,7 +105,7 @@ fn nushell_worktree_completion_after_spaces_executes_and_records_history() {
             assert_success(&output);
         }
         let script = format!(
-            "{prelude}let before = $env.PWD; let matches = ($env.CJ_LINE | commandline complete --detailed); if ($matches | length) != 1 {{ error make {{msg: 'partial worktree path did not filter candidates'}} }}; for args in [[$env.CJ_FLAG] [$env.CJ_FLAG ''] [$env.CJ_FLAG 'missing-worktree'] [$env.CJ_FLAG $env.CJ_EXPECTED 'extra']] {{ let failed = (try {{ __cj_cd ...$args; false }} catch {{ true }}); if not $failed {{ error make {{msg: 'invalid worktree invocation accepted'}} }} }}; if $env.PWD != $before or ($env.__cj_history | length) != 0 {{ error make {{msg: 'failed navigation changed state'}} }}"
+            "{prelude}let before = $env.PWD; let matches = ($env.CJ_LINE | commandline complete --detailed); if ($matches | length) != 1 {{ error make {{msg: 'partial worktree path did not filter candidates'}} }}; for args in [[$env.CJ_FLAG ''] [$env.CJ_FLAG 'missing-worktree'] [$env.CJ_FLAG $env.CJ_EXPECTED 'extra']] {{ let failed = (try {{ __cj_cd ...$args; false }} catch {{ true }}); if not $failed {{ error make {{msg: 'invalid worktree invocation accepted'}} }} }}; if $env.PWD != $before or ($env.__cj_history | length) != 0 {{ error make {{msg: 'failed navigation changed state'}} }}"
         );
         let output = command(&fixture, "nu")
             .args(["--no-config-file", "-c", &script])
@@ -148,7 +149,7 @@ foreach ($flag in @('-jw', '--jump-worktree')) {
     cd $flag $env:CJ_EXPECTED
     if ($global:__cj_history.Count -ne 1) { throw 'literal selected argument did not record history' }
     cd v
-    foreach ($arguments in @(@($flag), @($flag, ''), @($flag, 'missing-worktree'), @($flag, $env:CJ_EXPECTED, 'extra'))) {
+    foreach ($arguments in @(@($flag, ''), @($flag, 'missing-worktree'), @($flag, $env:CJ_EXPECTED, 'extra'))) {
         $failed = $false
         try { cd @arguments } catch { $failed = $true }
         if (-not $failed) { throw 'invalid worktree invocation accepted' }

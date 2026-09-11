@@ -101,7 +101,7 @@ fn powershell_wrapper_changes_its_calling_session_with_zoxide() {
 }
 
 #[test]
-fn powershell_wrapper_requires_tab_for_worktree_selection() {
+fn powershell_wrapper_enters_main_worktree_without_the_picker() {
     let git = GitFixture::new("windows-powershell-fzf");
     let tool = copy_tool(git.temp.path(), "fzf.exe");
     let config = git.temp.path().join("fzf config.toml");
@@ -136,24 +136,20 @@ fn powershell_wrapper_requires_tab_for_worktree_selection() {
         .env("CJ_FAKE_ARGS", &args)
         .env("CJ_FAKE_STDIN", &stdin)
         .env("PATH", path_with_cj())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("run PowerShell integration");
-        assert!(
-            !output.status.success(),
-            "PowerShell accepted {flag} without Tab"
-        );
-        assert_eq!(
-            output.stdout,
-            git.main_nested.as_os_str().as_encoded_bytes()
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("type cd -jw and press Tab to select a worktree")
-        );
+        assert_success(&output);
+        let actual = dunce::canonicalize(String::from_utf8(output.stdout).unwrap()).unwrap();
+        assert_eq!(actual, dunce::canonicalize(&git.main).unwrap());
+        assert!(output.stderr.is_empty());
     }
     assert!(
         !args.exists() && !stdin.exists(),
-        "executing the Tab token must not invoke fzf"
+        "bare worktree Enter must not invoke fzf"
     );
 }
 

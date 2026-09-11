@@ -225,8 +225,8 @@ fn fzf_cancellation_and_failure_are_controlled() {
 }
 
 #[test]
-fn generated_wrappers_require_tab_for_worktree_selection() {
-    let fixture = PickerFixture::new("worktree-tab-only");
+fn generated_wrappers_enter_main_worktree_without_the_picker() {
+    let fixture = PickerFixture::new("worktree-enter-main");
     let binary_dir = fixture.git.temp.path().join("binary dir");
     fs::create_dir_all(&binary_dir).expect("create binary directory");
     symlink(env!("CARGO_BIN_EXE_cj"), binary_dir.join("cj")).expect("link cj binary");
@@ -257,28 +257,26 @@ fn generated_wrappers_require_tab_for_worktree_selection() {
                 .env("CJ_FAKE_ARGS", &fixture.args)
                 .env("CJ_FAKE_STDIN", &fixture.stdin)
                 .env("CJ_FAKE_MODE", "success")
-                .env("CJ_FAKE_SELECTION", "1");
+                .env("CJ_FAKE_SELECTION", "1")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_COMMON_DIR")
+                .env_remove("GIT_INDEX_FILE");
             let output = match command.output() {
                 Ok(output) => output,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => panic!("cannot run {shell}: {error}"),
             };
             exercised += 1;
-            assert!(
-                !output.status.success(),
-                "{shell} accepted {flag} without Tab"
-            );
-            assert_eq!(output.stdout, path_output(&fixture.git.main_nested));
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("type cd -jw and press Tab to select a worktree")
-            );
+            assert_success(&output);
+            assert_eq!(output.stdout, path_output(&fixture.git.main));
+            assert!(output.stderr.is_empty());
         }
     }
     assert!(exercised > 0, "neither bash nor zsh is available");
     assert!(
         !fixture.args.exists() && !fixture.stdin.exists(),
-        "executing the Tab token must not invoke fzf"
+        "bare worktree Enter must not invoke fzf"
     );
 }
 
