@@ -56,6 +56,9 @@ function _cj_is_repeated() {{
     return 0
 }}
 
+# pwd and cj each emit one protocol LF. Append a marker before substitution,
+# then strip only that LF and marker, preserving any trailing LFs in the path.
+# Append the marker only on success so a failing command keeps its exit status.
 function _cj_record_move() {{
     local before="$1" after="$2" mode="${{3-other}}" parent physical previous
     [[ "$before" != "$after" ]] || return 0
@@ -67,7 +70,8 @@ function _cj_record_move() {{
         previous="$before"
         [[ -n "$parent" ]] || parent=/
         while [[ "$parent" != / ]]; do
-            physical="$(\builtin cd -- "$parent" && \builtin pwd -P)" || break
+            physical="$(\builtin cd -- "$parent" && \builtin pwd -P && printf .)" || break
+            physical="${{physical%$'\n.'}}"
             [[ "$physical" != "$after" ]] || break
             if [[ "$physical" != "$previous" ]]; then _cj_history+=("$physical"); fi
             previous="$physical"
@@ -83,11 +87,13 @@ function _cj_record_move() {{
 
 function _cj_builtin_cd() {{
     local before after result
-    before="$(\builtin pwd -P)" || return
+    before="$(\builtin pwd -P && printf .)" || return
+    before="${{before%$'\n.'}}"
     \{builtin} cd "$@"
     result=$?
     (( result == 0 )) || return "$result"
-    after="$(\builtin pwd -P)" || return
+    after="$(\builtin pwd -P && printf .)" || return
+    after="${{after%$'\n.'}}"
     _cj_record_move "$before" "$after"
 }}
 
@@ -157,9 +163,11 @@ function cd() {{
         _cj_index=$_cj_remaining
         [[ -n "${{ZSH_VERSION-}}" ]] && _cj_index=$((_cj_index + 1))
         target="${{_cj_history[_cj_index]}}"
-        _cj_before="$(\builtin pwd -P)" || return
+        _cj_before="$(\builtin pwd -P && printf .)" || return
+        _cj_before="${{_cj_before%$'\n.'}}"
         \{builtin} cd -- "$target" || return
-        _cj_after="$(\builtin pwd -P)" || return
+        _cj_after="$(\builtin pwd -P && printf .)" || return
+        _cj_after="${{_cj_after%$'\n.'}}"
         [[ "$_cj_before" != "$_cj_after" ]] || return 0
         _cj_history=("${{_cj_history[@]:0:_cj_remaining}}")
         if typeset -f _cj_key_history_reset >/dev/null; then _cj_key_history_reset; fi
@@ -169,13 +177,16 @@ function cd() {{
         -z|--zoxide|-Z|--no-zoxide) _cj_args=("$@") ;;
         *) _cj_args=(-- "$@") ;;
     esac
-    _cj_before="$(\builtin pwd -P)" || return
-    target="$(\command cj{config} "${{_cj_args[@]}}")"
+    _cj_before="$(\builtin pwd -P && printf .)" || return
+    _cj_before="${{_cj_before%$'\n.'}}"
+    target="$(\command cj{config} "${{_cj_args[@]}}" && printf .)"
     _cj_status=$?
     (( _cj_status == 0 )) || return "$_cj_status"
+    target="${{target%$'\n.'}}"
     [[ -n "$target" ]] || return 1
     \{builtin} cd -- "$target" || return
-    _cj_after="$(\builtin pwd -P)" || return
+    _cj_after="$(\builtin pwd -P && printf .)" || return
+    _cj_after="${{_cj_after%$'\n.'}}"
     _cj_record_move "$_cj_before" "$_cj_after" "$_cj_nav_mode"
 }}
 
