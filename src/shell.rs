@@ -246,6 +246,24 @@ function _cj_register_cd_completion() {{
         _cj_cd_completion_fallback="${{_comps[cd]-_cd}}"
         compdef _cj_complete_cd cd
     fi
+    if [[ "${{_comps[-command-]-}}" != _cj_complete_command ]]; then
+        _cj_command_completion_fallback="${{_comps[-command-]-_autocd}}"
+        compdef _cj_complete_command -command-
+    fi
+}}
+
+function _cj_complete_command() {{
+    # Hide only our metadata while the normal command completer runs. -h makes
+    # these ordinary local maps; the actual functions and variables stay usable.
+    local -h -A functions=( "${{(@kv)functions}}" ) parameters=( "${{(@kv)parameters}}" )
+    local _cj_name
+    for _cj_name in ${{(k)functions}}; do
+        [[ "$_cj_name" == _cj_* ]] && unset "functions[$_cj_name]"
+    done
+    for _cj_name in ${{(k)parameters}}; do
+        [[ "$_cj_name" == _cj_* ]] && unset "parameters[$_cj_name]"
+    done
+    "${{_cj_command_completion_fallback:-_autocd}}" "$@"
 }}
 
 if [[ -n "${{BASH_VERSION-}}" ]]; then
