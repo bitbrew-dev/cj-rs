@@ -371,18 +371,25 @@ fn powershell_smart_quotes_round_trip_in_source_and_completions() {
 
     let script = r#"$ErrorActionPreference = 'Stop'
 $global:CjInjected = 0
+function Test-SameDirectory([string]$Actual, [string]$Expected) {
+    # Git uses '/', while Windows PathBuf and Get-Location use '\'.
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    return [System.IO.Path]::GetFullPath($Actual).Equals([System.IO.Path]::GetFullPath($Expected), $comparison)
+}
 . $env:CJ_INIT_SOURCE
 . $env:CJ_COMPLETION_SOURCE
 if ($script:__cj_config[1] -cne $env:CJ_TEST_CONFIG) { throw 'config path changed' }
 $line = 'cd -jw'
 $before = (Get-Location).ProviderPath
 $result = TabExpansion2 $line $line.Length
-$match = @($result.CompletionMatches | Where-Object ListItemText -CEQ $env:CJ_TEST_WORKTREE)
-if ($match.Count -ne 1) { throw 'missing smart-quote worktree completion' }
+$match = @($result.CompletionMatches | Where-Object { Test-SameDirectory $_.ListItemText $env:CJ_TEST_WORKTREE })
+if ($match.Count -ne 1) { throw "missing smart-quote worktree completion: expected $env:CJ_TEST_WORKTREE; got $($result.CompletionMatches.ListItemText -join ', ')" }
 if ((Get-Location).ProviderPath -cne $before) { throw 'Tab changed directory' }
+$literalPath = & ([scriptblock]::Create($match[0].CompletionText))
+if ($literalPath -isnot [string] -or $literalPath -cne $match[0].ListItemText) { throw 'completion changed literal worktree path' }
 $completed = $line.Remove($result.ReplacementIndex, $result.ReplacementLength).Insert($result.ReplacementIndex, $match[0].CompletionText)
 & ([scriptblock]::Create($completed))
-if ((Get-Location).ProviderPath -cne $env:CJ_TEST_WORKTREE) { throw 'completed worktree path changed' }
+if (-not (Test-SameDirectory (Get-Location).ProviderPath $env:CJ_TEST_WORKTREE)) { throw 'completed worktree path changed' }
 $aliases = @($env:CJ_TEST_ALIASES | ConvertFrom-Json)
 foreach ($command in @('cj', 'cd')) {
     foreach ($expected in $aliases) {
@@ -399,7 +406,7 @@ foreach ($command in @('cj', 'cd')) {
         if ($value -isnot [string] -or $value -cne $expected) { throw "completion changed: $expected" }
         if ($command -ceq 'cd') {
             & ([scriptblock]::Create('cd ' + $literal))
-            if ((Get-Location).ProviderPath -cne $env:CJ_TEST_DESTINATION) { throw 'completed alias failed to resolve' }
+            if (-not (Test-SameDirectory (Get-Location).ProviderPath $env:CJ_TEST_DESTINATION)) { throw 'completed alias failed to resolve' }
         }
         if ($global:CjInjected -ne 0) { throw 'completion executed embedded code' }
     }
