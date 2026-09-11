@@ -57,6 +57,28 @@ function _cj_is_repeated() {{
     return 0
 }}
 
+function _cj_ticker_count() {{
+    local value="$1" ticker="$2" count=0
+    if _cj_is_repeated "$value" "$ticker"; then
+        printf '%s\n' "${{#value}}"
+        return
+    fi
+    if [[ "$value" == "$ticker"* ]]; then
+        value="${{value#"$ticker"}}"
+        case "$value" in
+            ''|*[!0-9]*) ;;
+            *)
+                value="${{value#"${{value%%[!0]*}}"}}"
+                if [[ -n "$value" && ${{#value}} -le 10 ]]; then
+                    count=$((10#$value))
+                    (( count <= 2147483647 )) || count=0
+                fi
+                ;;
+        esac
+    fi
+    printf '%s\n' "$count"
+}}
+
 # pwd and cj each emit one protocol LF. Append a marker before substitution,
 # then strip only that LF and marker, preserving any trailing LFs in the path.
 # Append the marker only on success so a failing command keeps its exit status.
@@ -101,7 +123,7 @@ function _cj_builtin_cd() {{
 \builtin unalias cd 2>/dev/null || :
 function cd() {{
     local target _cj_status _cj_before _cj_after _cj_nav_arg _cj_nav_mode
-    local _cj_count _cj_remaining _cj_index _cj_value
+    local _cj_count _cj_remaining _cj_index _cj_up_count _cj_parent
     local -a _cj_args
 
     if [[ $# -eq 0 ]]; then
@@ -154,15 +176,11 @@ function cd() {{
     esac
 
     _cj_nav_mode=other
-    if _cj_is_repeated "${{_cj_nav_arg-}}" "$_cj_navigate_up"; then
+    _cj_up_count="$(_cj_ticker_count "${{_cj_nav_arg-}}" "$_cj_navigate_up")"
+    _cj_count="$(_cj_ticker_count "${{_cj_nav_arg-}}" "$_cj_navigate_down")"
+    if (( _cj_up_count > 0 )); then
         _cj_nav_mode=up
-    elif _cj_is_repeated "${{_cj_nav_arg-}}" "$_cj_navigate_down"; then
-        _cj_count=0
-        _cj_value="$_cj_nav_arg"
-        while [[ -n "$_cj_value" ]]; do
-            _cj_count=$((_cj_count + 1))
-            _cj_value="${{_cj_value#"$_cj_navigate_down"}}"
-        done
+    elif (( _cj_count > 0 )); then
         _cj_remaining=$((${{#_cj_history[@]}} - _cj_count))
         if (( _cj_remaining < 0 )); then
             printf '%s\n' 'cj: directory history exhausted' >&2
@@ -192,6 +210,17 @@ function cd() {{
     (( _cj_status == 0 )) || return "$_cj_status"
     target="${{target%$'\n.'}}"
     [[ -n "$target" ]] || return 1
+    if (( _cj_up_count > 0 )); then
+        # Bound expansion by the shell's logical depth, preserving native .. semantics.
+        target=.
+        _cj_parent="$PWD"
+        while (( _cj_up_count > 0 )) && [[ "$_cj_parent" != / ]]; do
+            target="$target/.."
+            _cj_parent="${{_cj_parent%/*}}"
+            [[ -n "$_cj_parent" ]] || _cj_parent=/
+            _cj_up_count=$((_cj_up_count - 1))
+        done
+    fi
     \{builtin} cd -- "$target" || return
     _cj_after="$(\builtin pwd -P && printf .)" || return
     _cj_after="${{_cj_after%$'\n.'}}"
@@ -321,6 +350,18 @@ fn render_nu(config_path: Option<&Path>, settings: &Config) -> Result<String, St
     ($value | str length) > 0 and (($value | split chars | all {{ |char| $char == $ticker }}))
 }}
 
+def _cj-ticker-count [value: string, ticker: string] {{
+    if (_cj-is-repeated $value $ticker) {{ return ($value | str length) }}
+    if not ($value | str starts-with $ticker) {{ return 0 }}
+    let digits = ($value | split chars | skip 1 | str join)
+    if $digits !~ '^[0-9]+\z' {{ return 0 }}
+    let decimal = ($digits | str replace --regex '^0+' '')
+    if ($decimal | is-empty) or (($decimal | str length) > 10) {{ return 0 }}
+    let count = ($decimal | into int)
+    if $count > 2147483647 {{ return 0 }}
+    $count
+}}
+
 def --env _cj-record-move [before: string, mode: string = 'other', logical: string = ''] {{
     let after = ($env.PWD | path expand)
     if $before == $after {{ return }}
@@ -441,8 +482,9 @@ export def --env --wrapped __cj_cd [...args: string] {{
 
     let nav_arg = if (($args | length) == 1) {{ $args.0 }} else if (($args | length) == 2) and (($args.0 == '-Z') or ($args.0 == '--no-zoxide')) {{ $args.1 }} else {{ '' }}
     let invoke_args = if ($args.0 in ['-z' '--zoxide' '-Z' '--no-zoxide']) {{ $args }} else {{ ['--'] | append $args }}
-    if (_cj-is-repeated $nav_arg $navigate_down) {{
-        let count = ($nav_arg | str length)
+    let up_count = (_cj-ticker-count $nav_arg $navigate_up)
+    let count = (_cj-ticker-count $nav_arg $navigate_down)
+    if $count > 0 {{
         let remaining = (($env.__cj_history | length) - $count)
         if $remaining < 0 {{ error make {{ msg: 'cj: directory history exhausted' }} }}
         let target = ($env.__cj_history | get $remaining)
@@ -457,10 +499,22 @@ export def --env --wrapped __cj_cd [...args: string] {{
         if not ($result.stderr | is-empty) {{ print --stderr --no-newline $result.stderr }}
         error make {{ msg: $'cj exited with status ($result.exit_code)' }}
     }}
-    let target = ($result.stdout | str replace --regex '\r?\n$' '')
+    mut target = ($result.stdout | str replace --regex '\r?\n$' '')
     if ($target | is-empty) {{ error make {{ msg: 'cj returned an empty destination' }} }}
+    if $up_count > 0 {{
+        $target = '.'
+        mut parent = $logical
+        mut remaining = $up_count
+        while $remaining > 0 {{
+            let next = ($parent | path dirname)
+            if $next == $parent {{ break }}
+            $target = $'($target)/..'
+            $parent = $next
+            $remaining = $remaining - 1
+        }}
+    }}
     cd $target
-    let mode = if (_cj-is-repeated $nav_arg $navigate_up) {{ 'up' }} else {{ 'other' }}
+    let mode = if $up_count > 0 {{ 'up' }} else {{ 'other' }}
     _cj-record-move $before $mode $logical
 }}
 
@@ -498,6 +552,19 @@ function script:Test-CjRepeated {{
     param([string]$Value, [string]$Ticker)
     if ([string]::IsNullOrEmpty($Value) -or [string]::IsNullOrEmpty($Ticker)) {{ return $false }}
     return $Value.Replace($Ticker, '').Length -eq 0
+}}
+
+function script:Get-CjTickerCount {{
+    param([string]$Value, [string]$Ticker)
+    if (Test-CjRepeated $Value $Ticker) {{ return $Value.Length }}
+    if (-not $Value.StartsWith($Ticker, [System.StringComparison]::Ordinal)) {{ return 0 }}
+    $digits = $Value.Substring($Ticker.Length)
+    if ($digits -cnotmatch '^[0-9]+\z') {{ return 0 }}
+    $decimal = $digits.TrimStart([char]'0')
+    if ($decimal.Length -eq 0 -or $decimal.Length -gt 10) {{ return 0 }}
+    $count = [long]$decimal
+    if ($count -gt 2147483647) {{ return 0 }}
+    return [int]$count
 }}
 
 function script:Add-CjHistory {{
@@ -615,8 +682,15 @@ function global:cd {{
 
     $navArg = if ($cjArgs.Count -eq 1) {{ $first }} elseif (($cjArgs.Count -eq 2) -and (($first -ceq '-Z') -or ($first -ceq '--no-zoxide'))) {{ [string]$cjArgs[1] }} else {{ '' }}
     [string[]]$invokeArgs = if (($first -ceq '-z') -or ($first -ceq '--zoxide') -or ($first -ceq '-Z') -or ($first -ceq '--no-zoxide')) {{ $cjArgs }} else {{ @('--') + $cjArgs }}
-    if (Test-CjRepeated $navArg $script:__cj_navigate_down) {{
-        $remaining = $global:__cj_history.Count - $navArg.Length
+    if (($cjArgs.Count -eq 2) -and -not [string]::IsNullOrEmpty($navArg) -and (Test-Path -LiteralPath $navArg -PathType Container)) {{
+        Microsoft.PowerShell.Management\Set-Location -LiteralPath $navArg -ErrorAction Stop
+        Add-CjHistory $before
+        return
+    }}
+    $upCount = Get-CjTickerCount $navArg $script:__cj_navigate_up
+    $count = Get-CjTickerCount $navArg $script:__cj_navigate_down
+    if ($count -gt 0) {{
+        $remaining = $global:__cj_history.Count - $count
         if ($remaining -lt 0) {{ throw 'cj: directory history exhausted' }}
         $target = $global:__cj_history[$remaining]
         Microsoft.PowerShell.Management\Set-Location -LiteralPath $target -ErrorAction Stop
@@ -633,8 +707,21 @@ function global:cd {{
     $status = $LASTEXITCODE
     if ($status -ne 0) {{ throw "cj exited with status $status" }}
     if ($target.Count -ne 1 -or [string]::IsNullOrEmpty($target[0])) {{ throw 'cj returned an invalid destination' }}
-    Microsoft.PowerShell.Management\Set-Location -LiteralPath $target[0] -ErrorAction Stop
-    $mode = if (Test-CjRepeated $navArg $script:__cj_navigate_up) {{ 'up' }} else {{ 'other' }}
+    $destination = $target[0]
+    if ($upCount -gt 0) {{
+        $destination = '.'
+        $parent = $before
+        $remaining = $upCount
+        while ($remaining -gt 0) {{
+            $next = [System.IO.Path]::GetDirectoryName($parent)
+            if ([string]::IsNullOrEmpty($next)) {{ break }}
+            $destination += [System.IO.Path]::DirectorySeparatorChar + '..'
+            $parent = $next
+            $remaining--
+        }}
+    }}
+    Microsoft.PowerShell.Management\Set-Location -LiteralPath $destination -ErrorAction Stop
+    $mode = if ($upCount -gt 0) {{ 'up' }} else {{ 'other' }}
     Add-CjHistory $before $mode
 }}
 

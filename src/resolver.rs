@@ -31,10 +31,15 @@ pub fn resolve(
         }
 
         if let Some(text) = targets[0].to_str() {
-            if let Some(count) = repeated_count(text, &config.tickers.navigate_up) {
-                return Ok(parent_path(count));
+            if let Some(count) = ticker_count(text, &config.tickers.navigate_up)? {
+                let logical = std::env::var_os("PWD");
+                return Ok(parent_path(
+                    count,
+                    &navigation.cwd,
+                    logical.as_deref().map(std::path::Path::new),
+                ));
             }
-            if let Some(count) = repeated_count(text, &config.tickers.navigate_down) {
+            if let Some(count) = ticker_count(text, &config.tickers.navigate_down)? {
                 return navigate_down(count, navigation);
             }
             if let Some(path) = config.aliases.get(text) {
@@ -179,16 +184,46 @@ enum ZoxideFailure {
     Query(String),
 }
 
-fn repeated_count(target: &str, ticker: &str) -> Option<usize> {
-    let ticker = ticker.chars().next()?;
-    let mut characters = target.chars();
-    let first = characters.next()?;
-    (first == ticker && characters.all(|character| character == ticker))
-        .then(|| target.chars().count())
+fn ticker_count(target: &str, ticker: &str) -> Result<Option<usize>, String> {
+    let Some(character) = ticker.chars().next() else {
+        return Ok(None);
+    };
+    let Some(suffix) = target.strip_prefix(ticker) else {
+        return Ok(None);
+    };
+    if target.chars().all(|value| value == character) {
+        return Ok(Some(target.chars().count()));
+    }
+    // Reserve numeric-looking suffixes while leaving names such as "venv" alone.
+    if !suffix.starts_with(|character: char| {
+        character.is_ascii_digit() || matches!(character, '+' | '-' | '.')
+    }) {
+        return Ok(None);
+    }
+    let count = suffix
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| suffix.parse::<u32>().ok())
+        .flatten()
+        .filter(|count| (1..=2_147_483_647).contains(count));
+    count.map(|count| Some(count as usize)).ok_or_else(|| {
+        format!("invalid navigation count in {target:?}: expected a positive decimal integer from 1 to 2147483647")
+    })
 }
 
-fn parent_path(count: usize) -> PathBuf {
-    std::iter::repeat_n("..", count).collect()
+fn parent_path(count: usize, cwd: &std::path::Path, logical: Option<&std::path::Path>) -> PathBuf {
+    // More parent components than either current path's depth cannot change the
+    // destination. Keep relative components for native logical/symlink semantics,
+    // but never allocate a path proportional to an arbitrary numeric count.
+    let depth = |path: &std::path::Path| {
+        path.components()
+            .filter(|component| matches!(component, Component::Normal(_)))
+            .count()
+    };
+    let limit = depth(cwd)
+        .max(logical.filter(|path| path.is_absolute()).map_or(0, depth))
+        .max(1);
+    std::iter::repeat_n("..", count.min(limit)).collect()
 }
 
 fn navigate_down(count: usize, navigation: &NavigationContext) -> Result<PathBuf, String> {
@@ -277,9 +312,61 @@ mod tests {
 
     #[test]
     fn repeated_ticker_becomes_parent_path() {
-        assert_eq!(repeated_count("^^^", "^"), Some(3));
-        assert_eq!(repeated_count("^x", "^"), None);
-        assert_eq!(parent_path(3), PathBuf::from("../../.."));
+        assert_eq!(ticker_count("^^^", "^"), Ok(Some(3)));
+        assert_eq!(ticker_count("^x", "^"), Ok(None));
+        assert_eq!(
+            parent_path(3, Path::new("a/b/c"), None),
+            PathBuf::from("../../..")
+        );
+    }
+
+    #[test]
+    fn counted_tickers_are_positive_decimal_and_bounded() {
+        for (target, ticker, count) in [
+            ("^2", "^", 2),
+            ("v003", "v", 3),
+            ("u08", "u", 8),
+            ("k2147483647", "k", 2_147_483_647),
+        ] {
+            assert_eq!(ticker_count(target, ticker), Ok(Some(count)), "{target}");
+        }
+        for target in [
+            "^0",
+            "^000",
+            "^-1",
+            "^+1",
+            "^1.5",
+            "^.5",
+            "^1e2",
+            "^1\n",
+            "^1\r\n",
+            "^1 ",
+            "^2147483648",
+            "^999999999999999999999999",
+        ] {
+            assert!(
+                ticker_count(target, "^")
+                    .unwrap_err()
+                    .contains("positive decimal integer"),
+                "{target}"
+            );
+        }
+        for (target, ticker) in [("venv", "v"), ("code", "^"), ("^^2", "^"), ("", "^")] {
+            assert_eq!(ticker_count(target, ticker), Ok(None));
+        }
+        assert_eq!(
+            parent_path(2_147_483_647, Path::new("a/b"), None),
+            PathBuf::from("../..")
+        );
+        assert_eq!(
+            parent_path(2_147_483_647, Path::new("/"), None),
+            PathBuf::from("..")
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            parent_path(3, Path::new("/a"), Some(Path::new("/a/logical/link"))),
+            PathBuf::from("../../..")
+        );
     }
 
     #[test]

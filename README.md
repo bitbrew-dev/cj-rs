@@ -112,7 +112,9 @@ cd external-ssd # a configured mount
 cd top          # top level of the current Git repository
 cd origin       # main worktree; "og" is also enabled by default
 cd ^^^          # three directories up
+cd ^3           # the same three parent moves
 cd vvv          # go back three directory-history entries
+cd v3           # the same three history entries
 ```
 
 The down ticker uses browser-style directory history: every successful `cd` change
@@ -121,6 +123,24 @@ paths, and zoxide jumps. `cd v` goes back one entry; `cd vvv` goes back three.
 Moving up with `cd ^^^` records each traversed parent so `cd vvv` retraces the move.
 History keeps the latest 100 departures in the current shell session and resets
 when you reload the integration. Existing directories always win over tickers.
+
+Repeated tickers and counted tickers are equivalent: `^^` means `^2`, and `vvv`
+means `v3`. Counts are decimal integers from 1 to 2147483647; leading zeros are
+accepted as decimal (`^08` means eight levels). Zero, signed, fractional, and
+overflowing counts report an error without changing the directory or history.
+The same syntax uses your configured tickers, for example `u5` or `k3`.
+
+Upward navigation stops at the filesystem root even if the count exceeds the
+available parents. It records only the actual parent moves, subject to the history
+limit; already at root is a successful no-op. For example, `cd ^5` from `/a/b`
+reaches `/`, and `cd v2` returns to `/a/b`. Backward navigation remains strict:
+`cd v5` requires five history entries and fails without consuming any if fewer
+are available. It goes back through history, not down into child directories.
+
+A real directory named `^2` or even `^-1` still takes precedence. Otherwise,
+numeric-looking targets beginning with a configured ticker are reserved for
+counted navigation before aliases, mounts, or Git keywords. Names such as `venv`
+remain ordinary targets. Use `-r` to treat a destination as a literal path.
 
 Going back consumes entries without adding the current directory. An empty or
 insufficient history reports `cj: directory history exhausted`; a missing history

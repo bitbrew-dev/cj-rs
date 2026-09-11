@@ -28,6 +28,12 @@ then supplies zoxide or literal-path fallback. Explicit `-r`, `-z`, and `-Z` mod
 keep their documented overrides. A configured alias or mount that cannot be reached
 remains an error rather than silently resolving to another destination.
 
+Navigation supports both repeated tickers and positive decimal counts: `^^` and
+`^2` are equivalent, as are `vvv` and `v3`, including with configured tickers.
+Upward counts cap at the filesystem root; backward counts exceeding available
+history fail without changing the directory or history. Count limits and the
+directory-first rule are documented in the README.
+
 ## Generated shell integration
 
 The documented `cd` wrapper, directory history, Tab completion, and optional key
