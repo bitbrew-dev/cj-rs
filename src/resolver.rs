@@ -237,7 +237,7 @@ fn component_eq(left: Component<'_>, right: Component<'_>) -> bool {
     }
 }
 
-fn main_worktree() -> Result<PathBuf, String> {
+pub fn main_worktree() -> Result<PathBuf, String> {
     let output = Command::new("git")
         .args(["worktree", "list", "--porcelain", "-z"])
         .output()

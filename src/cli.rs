@@ -51,6 +51,7 @@ pub enum Command {
         jump: bool,
     },
     WorktreePaths0,
+    MainWorktree,
     KeyBindingZoxide {
         zoxide: PathBuf,
         fzf: PathBuf,
@@ -110,6 +111,7 @@ impl Cli {
         let mut relative = false;
         let mut jump = false;
         let mut worktree_paths0 = false;
+        let mut main_worktree = false;
         let mut key_binding_zoxide = None;
         let mut setup_key_binding = false;
         let mut no_setup_key_binding = false;
@@ -159,6 +161,11 @@ impl Cli {
                 jump = true;
             } else if options && text == Some("--worktree-paths0") {
                 worktree_paths0 = true;
+            } else if options && text == Some("--internal-main-worktree") {
+                if main_worktree {
+                    return Err("--internal-main-worktree cannot be repeated".into());
+                }
+                main_worktree = true;
             } else if options && text == Some("--internal-key-binding-zoxide") {
                 if key_binding_zoxide.is_some() {
                     return Err("--internal-key-binding-zoxide cannot be repeated".into());
@@ -200,7 +207,25 @@ impl Cli {
             );
         }
 
-        let command = if let Some((zoxide, fzf)) = key_binding_zoxide {
+        let command = if main_worktree {
+            if force_resolve
+                || !targets.is_empty()
+                || key_binding_zoxide.is_some()
+                || worktree_paths0
+                || worktree
+                || format.is_some()
+                || relative
+                || resolver != ResolverOverride::Configured
+                || setup_key_binding
+                || preamp
+                || config_path.is_some()
+                || output.is_some()
+                || verbose
+            {
+                return Err("--internal-main-worktree cannot be combined with another mode".into());
+            }
+            Command::MainWorktree
+        } else if let Some((zoxide, fzf)) = key_binding_zoxide {
             if force_resolve
                 || !targets.is_empty()
                 || worktree_paths0
@@ -571,6 +596,49 @@ mod tests {
         assert!(Cli::parse(["--worktree-paths0", "-w"].map(Into::into)).is_err());
         assert!(Cli::parse(["--worktree-paths0", "target"].map(Into::into)).is_err());
         assert!(Cli::parse(["--worktree-paths0", "--"].map(Into::into)).is_err());
+    }
+
+    #[test]
+    fn main_worktree_protocol_is_hidden_and_rejects_other_modes() {
+        const FLAG: &str = "--internal-main-worktree";
+        assert_eq!(
+            Cli::parse([FLAG].map(Into::into)).unwrap().command,
+            Command::MainWorktree
+        );
+        assert!(!HELP.contains(FLAG));
+        assert_eq!(
+            Cli::parse(["--", FLAG].map(Into::into)).unwrap().command,
+            Command::Resolve {
+                targets: vec![FLAG.into()],
+                resolver: ResolverOverride::Configured,
+            }
+        );
+        for extra in [
+            vec![FLAG],
+            vec!["target"],
+            vec!["--"],
+            vec!["-jw"],
+            vec!["--worktree-paths0"],
+            vec!["--internal-key-binding-zoxide", "zoxide", "fzf"],
+            vec!["-z"],
+            vec!["-R"],
+            vec!["-f", "json"],
+            vec!["-C", "config.toml"],
+            vec!["-o", "out"],
+            vec!["--no-setup-key-binding"],
+            vec!["--preamp"],
+            vec!["-v"],
+        ] {
+            assert!(
+                Cli::parse(
+                    std::iter::once(FLAG)
+                        .chain(extra.iter().copied())
+                        .map(Into::into)
+                )
+                .is_err(),
+                "accepted incompatible arguments: {extra:?}"
+            );
+        }
     }
 
     #[test]

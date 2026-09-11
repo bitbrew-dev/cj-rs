@@ -142,6 +142,7 @@ fn execute(cli: Cli) -> Result<Execution, String> {
                 .unwrap_or_else(|| Ok(Execution::stdout(String::new())))
         }
         Command::WorktreePaths0 => worktree::paths0(&worktree::list()?).map(Execution::raw),
+        Command::MainWorktree => resolver::main_worktree().and_then(Execution::path),
         Command::MountsScan { format } => {
             let context = mounts::DiscoveryContext::from_process()?;
             let report = mounts::scan(&context);
