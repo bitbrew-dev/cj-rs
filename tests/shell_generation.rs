@@ -317,6 +317,102 @@ if (Get-Command Get-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
 }
 
 #[test]
+fn powershell_cd_tab_completion_merges_configured_and_native_targets() {
+    if !available("pwsh") {
+        eprintln!("skipping PowerShell cd completion test: pwsh is unavailable");
+        return;
+    }
+    let temp = TempDir::new("powershell-cd-completion");
+    let destination = temp.path().join("qa native directory");
+    fs::create_dir_all(&destination).unwrap();
+    let config = temp.path().join("config.toml");
+    fs::write(
+        &config,
+        format!(
+            "[keywords]\ntop = [\"qa-top\"]\nmain-worktree = [\"qa-main\"]\n\
+             [tickers]\nnavigate_up = \"k\"\nnavigate_down = \"j\"\n\
+             [aliases]\n\"qa team\" = \"{}\"\n\
+             [mounts.qa-mount]\npath = \"{}\"\n",
+            toml_string(&destination),
+            toml_string(&destination),
+        ),
+    )
+    .unwrap();
+    let integration = temp.path().join("init.ps1");
+    fs::write(
+        &integration,
+        generate(temp.path(), &config, "init", "powershell"),
+    )
+    .unwrap();
+    let script = r#"$ErrorActionPreference = 'Stop'
+. $env:CJ_INIT_SOURCE
+. $env:CJ_INIT_SOURCE
+$before = (Get-Location).ProviderPath
+function Assert-NativePreserved($line, $result) {
+    $native = & $script:__cj_tab_expansion2 $line $line.Length
+    if ($result.ReplacementIndex -ne $native.ReplacementIndex -or $result.ReplacementLength -ne $native.ReplacementLength) { throw "native replacement span changed: $line" }
+    foreach ($match in $native.CompletionMatches) {
+        if ($match.CompletionText -cnotin $result.CompletionMatches.CompletionText) { throw "native completion lost: $line" }
+    }
+}
+foreach ($line in @('cd ', 'cd qa', 'CD qa', "cd 'qa t", 'cd "qa t', 'Write-Output ok; cd qa')) {
+    $result = TabExpansion2 $line $line.Length
+    Assert-NativePreserved $line $result
+    $names = @($result.CompletionMatches.ListItemText)
+    $expected = if ($line -eq 'cd ') { @('qa-top', 'qa-main', 'qa team', 'qa-mount', 'k', 'j') } elseif ($line -like '*qa t') { @('qa team') } else { @('qa-top', 'qa-main', 'qa team', 'qa-mount') }
+    foreach ($name in $expected) {
+        if (@($names | Where-Object { $_ -ceq $name }).Count -ne 1) { throw "missing or duplicated destination $name in $line" }
+    }
+}
+foreach ($ticker in @('k', 'j')) {
+    $line = 'cd ' + $ticker
+    if ($ticker -cnotin (TabExpansion2 $line $line.Length).CompletionMatches.ListItemText) { throw "missing ticker $ticker" }
+}
+$line = 'cd qa'
+$result = TabExpansion2 $line $line.Length
+if (@($result.CompletionMatches | Where-Object ResultType -EQ ProviderContainer).Count -eq 0) { throw 'native directory completion missing' }
+# Complete before a suffix and execute exactly the replacement PowerShell provides.
+$line = 'cd qaZZ; $global:CjSuffixRan = 1'
+$result = TabExpansion2 $line 5
+$match = @($result.CompletionMatches | Where-Object ListItemText -CEQ 'qa team')
+if ($match.Count -ne 1) { throw 'missing completion at middle cursor' }
+$completed = $line.Remove($result.ReplacementIndex, $result.ReplacementLength).Insert($result.ReplacementIndex, $match[0].CompletionText)
+if ($completed -cne "cd 'qa team'; `$global:CjSuffixRan = 1") { throw "incorrect replacement: $completed" }
+if ((Get-Location).ProviderPath -cne $before -or $global:__cj_history.Count -ne 0) { throw 'completion changed directory or history' }
+& ([scriptblock]::Create($completed))
+$comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+if (-not [System.IO.Path]::GetFullPath((Get-Location).ProviderPath).Equals([System.IO.Path]::GetFullPath($env:CJ_TEST_DESTINATION), $comparison) -or $global:CjSuffixRan -ne 1) { throw 'completed alias failed to execute' }
+foreach ($line in @('Write-Output qa', 'cd qa qa', 'cd -Path qa', 'cd -j', 'cd qa ', 'cd qa # comment', '"cd qa', 'cd $HOME', 'cd @(qa)', 'cd qa | Write-Output qa')) {
+    $result = TabExpansion2 $line $line.Length -options @{ IgnoreHidden = $true }
+    $native = & $script:__cj_tab_expansion2 $line $line.Length -options @{ IgnoreHidden = $true }
+    if (($result | ConvertTo-Json -Depth 5 -Compress) -cne ($native | ConvertTo-Json -Depth 5 -Compress)) { throw "completion was not delegated: $line" }
+}
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput('cd qa', [ref]$tokens, [ref]$errors)
+$params = @{ ast = $ast; tokens = $tokens; positionOfCursor = $ast.Extent.EndScriptPosition; options = @{} }
+$result = TabExpansion2 @params
+$native = & $script:__cj_tab_expansion2 @params
+if (($result | ConvertTo-Json -Depth 5 -Compress) -cne ($native | ConvertTo-Json -Depth 5 -Compress)) { throw 'AST completion was not delegated' }
+"#;
+    let output = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .current_dir(temp.path())
+        .env("PATH", path_with_cj())
+        .env("HOME", temp.path())
+        .env("CJ_INIT_SOURCE", &integration)
+        .env("CJ_TEST_DESTINATION", &destination)
+        .output()
+        .unwrap();
+    assert_success(&output);
+}
+
+#[test]
 fn powershell_smart_quotes_round_trip_in_source_and_completions() {
     if !available("pwsh") {
         eprintln!("skipping PowerShell smart quote test: pwsh is unavailable");
@@ -395,7 +491,7 @@ foreach ($command in @('cj', 'cd')) {
     foreach ($expected in $aliases) {
         $line = $command + ' ' + $expected.Substring(0, 2)
         $candidates = if ($command -ceq 'cd') {
-            Complete-CjCdArgument $expected.Substring(0, 2)
+            (TabExpansion2 $line $line.Length).CompletionMatches
         } else {
             [System.Management.Automation.CommandCompletion]::CompleteInput($line, $line.Length, $null).CompletionMatches
         }

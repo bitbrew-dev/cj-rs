@@ -522,7 +522,7 @@ function script:ConvertTo-CjCompletionText {{
 }}
 
 function script:Complete-CjCdArgument {{
-    param([string]$WordToComplete)
+    param([string]$WordToComplete, [switch]$DestinationsOnly)
 
     if (($WordToComplete -ceq '-jw') -or ($WordToComplete -ceq '--jump-worktree')) {{
         $configArgs = $script:__cj_config
@@ -550,6 +550,7 @@ function script:Complete-CjCdArgument {{
             [System.Management.Automation.CompletionResult]::new($completion, $destination, 'ParameterValue', 'cj destination')
         }}
     }}
+    if ($DestinationsOnly) {{ return }}
     [System.Management.Automation.CompletionCompleters]::CompleteFilename($WordToComplete) |
         Where-Object ResultType -eq ([System.Management.Automation.CompletionResultType]::ProviderContainer)
 }}
@@ -674,7 +675,44 @@ if (Test-Path Function:TabExpansion2) {{
                 )
             }}
         }}
-        return & $script:__cj_tab_expansion2 @PSBoundParameters
+        $native = & $script:__cj_tab_expansion2 @PSBoundParameters
+        if ($PSCmdlet.ParameterSetName -cne 'ScriptInputSet') {{ return $native }}
+
+        # The wrapper has no formal Path parameter, so PowerShell does not invoke an
+        # argument completer for ordinary cd targets. Keep native completion and add
+        # configured destinations only at the first literal argument's replacement span.
+        $parsedTokens = $null
+        $parseErrors = $null
+        $parsed = [System.Management.Automation.Language.Parser]::ParseInput($beforeCursor, [ref]$parsedTokens, [ref]$parseErrors)
+        $commands = $parsed.FindAll({{ param($node) $node -is [System.Management.Automation.Language.CommandAst] }}, $true)
+        foreach ($command in $commands) {{
+            if ($command.GetCommandName() -ine 'cd') {{ continue }}
+            $elements = $command.CommandElements
+            $word = ''
+            if ($elements.Count -eq 1) {{
+                $tail = $beforeCursor.Substring($command.Extent.EndOffset)
+                if ($tail -notmatch '^[ \t]+$' -or $native.ReplacementIndex -ne $cursorColumn) {{ continue }}
+            }} elseif ($elements.Count -eq 2) {{
+                $argument = $elements[1]
+                if ($argument -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                    $argument.Extent.EndOffset -ne $cursorColumn -or
+                    $argument.Extent.StartOffset -ne $native.ReplacementIndex) {{ continue }}
+                $word = $argument.Value
+                if ($word.StartsWith('-')) {{ continue }}
+            }} else {{ continue }}
+
+            $extra = @(Complete-CjCdArgument $word -DestinationsOnly)
+            if ($extra.Count -eq 0) {{ return $native }}
+            $results = [System.Collections.ObjectModel.Collection[System.Management.Automation.CompletionResult]]::new()
+            foreach ($match in $native.CompletionMatches) {{ [void]$results.Add($match) }}
+            foreach ($match in $extra) {{
+                if ($match.CompletionText -cnotin $results.CompletionText) {{ [void]$results.Add($match) }}
+            }}
+            return [System.Management.Automation.CommandCompletion]::new(
+                $results, $native.CurrentMatchIndex, $native.ReplacementIndex, $native.ReplacementLength
+            )
+        }}
+        return $native
     }}
 }}"#
     );
