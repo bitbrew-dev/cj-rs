@@ -122,6 +122,7 @@ function _cj_builtin_cd() {{
 
 \builtin unalias cd 2>/dev/null || :
 function cd() {{
+    typeset -f _cj_record_move >/dev/null || {{ \{builtin} cd "$@"; return; }}
     local target _cj_status _cj_before _cj_after _cj_nav_arg _cj_nav_mode
     local _cj_count _cj_remaining _cj_index _cj_up_count _cj_parent
     local -a _cj_args
