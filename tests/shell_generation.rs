@@ -710,3 +710,56 @@ fn toml_string(path: &Path) -> String {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
 }
+
+#[cfg(unix)]
+#[test]
+fn posix_cd_falls_back_to_builtin_when_helpers_are_missing() {
+    let temp = TempDir::new("cd-missing-helpers");
+    let config = temp.path().join("config.toml");
+    fs::write(&config, "").expect("write config");
+    let target = temp.path().join("target dir");
+    fs::create_dir(&target).expect("create target");
+    let expected = fs::canonicalize(&target).expect("canonical target");
+
+    for (shell, args, strip) in [
+        (
+            "bash",
+            ["--noprofile", "--norc", "-c"],
+            "for f in $(compgen -A function _cj_); do unset -f \"$f\"; done",
+        ),
+        (
+            "zsh",
+            ["-f", "-c", "--"],
+            "unfunction ${(k)functions[(I)_cj_*]}",
+        ),
+    ] {
+        if !available(shell) {
+            eprintln!("skipping {shell} missing-helper test: interpreter is unavailable");
+            continue;
+        }
+        let source = generate_with_args(
+            temp.path(),
+            &config,
+            ["init", shell, "--no-setup-key-binding"],
+        );
+        let output = Command::new(shell)
+            .args(args)
+            .arg(format!(
+                "eval \"$1\"; {strip}; cd \"$2\" && pwd -P; cd \"$2/missing\" 2>/dev/null; echo \"status=$?\""
+            ))
+            .args(["_", &source, target.to_str().unwrap()])
+            .output()
+            .expect("run shell");
+        assert_success(&output);
+        assert!(
+            output.stderr.is_empty(),
+            "{shell}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}\nstatus=1\n", expected.display()),
+            "{shell}"
+        );
+    }
+}
